@@ -7,6 +7,30 @@ import torchvision
 from torchvision import datasets, transforms
 import numpy as np
 
+
+def getMNISTDataLoader(bs):
+    # MNIST Dataset
+    train_dataset = datasets.MNIST(root='./mnist_data/', train=True, download=True, transform=transforms.Compose([
+        transforms.Resize((32, 32)),
+        AddUniformNoise(),
+        ToTensor()
+        # transforms.ToTensor()
+    ]))
+    test_dataset = datasets.MNIST(root='./mnist_data/', train=False, download=True,
+                                  transform=transforms.Compose([
+                                      transforms.Resize((32, 32)),
+                                      AddUniformNoise(),
+                                      ToTensor()
+                                      # transforms.ToTensor()
+                                  ]))
+
+    # Data Loader (Input Pipeline)
+    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False)
+
+    return train_loader, test_loader
+
+
 def logit(x, alpha=1E-6):
     y = alpha + (1.-2*alpha)*x
     return np.log(y) - np.log(1. - y)
@@ -55,24 +79,77 @@ class StupidPositionalEncoder(nn.Module):
         return t.float() / self.T_MAX
 
 
+class CNNDiffusionModel(nn.Module):
+    def __init__(self, cnn=False):
+        super(CNNDiffusionModel, self).__init__()
+        self.T_MAX = 20
+        self.latent_s = 20
+        self.device = 'cpu'
+        t_emb_s = 20
+        self.pos_enc = PositionalEncoder(t_emb_s // 2)  # StupidPositionalEncoder(T_MAX)  #
+        # dec = TemporalDecoder(784, latent_s, [256]*2, t_emb_s).to(dev)
+        # enc = TemporalEncoder(784, latent_s, [256]*4, t_emb_s).to(dev)
+        if cnn:
+            self.enc = SimpleImageEncoder([1, 32, 32], self.latent_s, [200] * 4, t_dim=t_emb_s).to(dev)
+            self.dec = SimpleImageDecoder(self.enc.features_dim, self.latent_s, [200] * 3, t_dim=t_emb_s).to(dev)
+        else:
+            self.dec = TemporalDecoder(784, self.latent_s, [256] * 2, t_emb_s).to(dev)
+            self.enc = TemporalEncoder(784, self.latent_s, [256] * 4, t_emb_s).to(dev)
+
+        self.trans = TransitionNet(self.latent_s, [100] * 3, t_emb_s).to(dev)
+        self.dif = DataDiffuser(beta_min=1e-2, beta_max=1., t_max=self.T_MAX).to(dev)
+        self.sampling_t0 = False
+
+    def loss(self, x0):
+        if self.sampling_t0:
+            t0 = torch.randint(0, self.T_MAX - 1, [x0.shape[0]]).to(dev)
+            x_t0, sigma_x_t0 = self.dif.diffuse(x0, t0, torch.zeros(x0.shape[0]).long().to(dev))
+        else:
+            t0 = torch.zeros(x0.shape[0]).to(dev).long()
+            x_t0 = x0
+
+        z_t0 = self.enc(x_t0.view(-1, 1, 32, 32), self.pos_enc(t0.float().unsqueeze(1)))
+        # z_t0 = z_t0 + torch.randn(z_t0.shape).to(dev) * (1 - dif.alphas[t0]).sqrt().unsqueeze(1).expand(-1, z_t0.shape[1])
+        t = torch.torch.distributions.Uniform(t0.float() + 1, torch.ones_like(t0) * self.T_MAX).sample().long().to(dev)
+
+        z_t, sigma_z = self.dif.diffuse(z_t0, t, t0)
+        x_t, sigma_x = self.dif.diffuse(x_t0, t, t0)
+
+        mu_x_pred = self.dec(z_t, self.pos_enc(t.float().unsqueeze(1)))
+        KL_x = ((mu_x_pred - x_t.view(bs, 1, 32, 32)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
+
+        mu_z_pred = self.trans(z_t, self.pos_enc(t.float().unsqueeze(1)))
+        mu, sigma = self.dif.prev_mean(z_t0, z_t, t)
+        KL_z = ((mu - mu_z_pred) ** 2).sum(1) / sigma ** 2
+
+        loss = KL_x.mean(0) + KL_z.mean(0)
+
+        return loss
+
+    def to(self, device):
+        super().to(device)
+        self.device = device
+        return self
+
+    def sample(self, nb_samples=1):
+        zT = torch.randn(64, self.latent_s).to(self.device)
+        z_t = zT
+        for t in range(self.T_MAX - 1, 0, -1):
+            t_t = torch.ones(64, 1).to(self.device) * t
+            if t > 0:
+                sigma = ((1 - self.dif.alphas[t - 1]) / (1 - self.dif.alphas[t]) * self.dif.betas[t]).sqrt()
+            else:
+                sigma = 0
+            z_t = self.trans(z_t, self.pos_enc(t_t)) + torch.randn(z_t.shape).to(dev) * sigma
+
+        x_0 = self.dec(z_t, self.pos_enc(torch.zeros(nb_samples, 1))).view(-1, 784)
+
+        return x_0
+
 if __name__ == "__main__":
     bs = 100
-    # MNIST Dataset
-    train_dataset = datasets.MNIST(root='./mnist_data/', train=True, download=True, transform=transforms.Compose([
-        AddUniformNoise(),
-        ToTensor()
-        # transforms.ToTensor()
-    ]))
-    test_dataset = datasets.MNIST(root='./mnist_data/', train=False, download=True,
-                                  transform=transforms.Compose([
-                                      AddUniformNoise(),
-                                      ToTensor()
-                                      # transforms.ToTensor()
-                                  ]))
 
-    # Data Loader (Input Pipeline)
-    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False)
+    train_loader, test_loader = getMNISTDataLoader(bs)
 
     # Compute Mean abd std per pixel
     x_mean = 0
@@ -85,20 +162,10 @@ if __name__ == "__main__":
     x_std = (x_mean2 / (batch_idx + 1) - x_mean ** 2) ** .5
     x_std[x_std == 0.] = 1.
 
-    T_MAX = 25
-    latent_s = 25
-    t_emb_s = 1
-    pos_enc = StupidPositionalEncoder(T_MAX)  # PositionalEncoder(t_emb_s//2)#
     dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    #dec = TemporalDecoder(784, latent_s, [256]*2, t_emb_s).to(dev)
-    #enc = TemporalEncoder(784, latent_s, [256]*4, t_emb_s).to(dev)
-    enc = SimpleImageEncoder([1, 28, 28], latent_s, [100, 100, 100]).to(dev)
-    dec = SimpleImageDecoder(enc.features_dim, latent_s, [30, 30]).to(dev)
-    trans = TransitionNet(latent_s, [100]*2, t_emb_s).to(dev)
-    dif = DataDiffuser(beta_min=1e-2, beta_max=1., t_max=T_MAX).to(dev)
-    sampling_t0 = False
+    model = CNNDiffusionModel(True).to(dev)#CNNDiffusionModel().to(dev)
 
-    optimizer = optim.Adam(list(dec.parameters()) + list(enc.parameters()) + list(trans.parameters()), lr=.001)
+    optimizer = optim.Adam(model.parameters(), lr=.001)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
 
 
@@ -117,28 +184,7 @@ if __name__ == "__main__":
             x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(bs, -1)) / x_std.to(dev).unsqueeze(0).expand(bs, -1)
             optimizer.zero_grad()
 
-            if sampling_t0:
-                t0 = torch.randint(0, T_MAX - 1, [x0.shape[0]]).to(dev)
-                x_t0, sigma_x_t0 = dif.diffuse(x0, t0, torch.zeros(x0.shape[0]).long().to(dev))
-            else:
-                t0 = torch.zeros(x0.shape[0]).to(dev).long()
-                x_t0 = x0
-
-            z_t0 = enc(x_t0.view(-1, 1, 28, 28), pos_enc(t0.float().unsqueeze(1)))
-            # z_t0 = z_t0 + torch.randn(z_t0.shape).to(dev) * (1 - dif.alphas[t0]).sqrt().unsqueeze(1).expand(-1, z_t0.shape[1])
-            t = torch.torch.distributions.Uniform(t0.float() + 1, torch.ones_like(t0) * T_MAX).sample().long().to(dev)
-
-            z_t, sigma_z = dif.diffuse(z_t0, t, t0)
-            x_t, sigma_x = dif.diffuse(x_t0, t, t0)
-
-            mu_x_pred = dec(z_t, pos_enc(t.float().unsqueeze(1)))
-            KL_x = ((mu_x_pred - x_t.view(bs, 1, 28, 28)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
-
-            mu_z_pred = trans(z_t, pos_enc(t.float().unsqueeze(1)))
-            mu, sigma = dif.prev_mean(z_t0, z_t, t)
-            KL_z = ((mu - mu_z_pred) ** 2).sum(1) / sigma ** 2
-
-            loss = KL_x.mean(0) + KL_z.mean(0)
+            loss = model.loss(x0)
 
             loss.backward()
             train_loss += loss.item()
@@ -148,25 +194,10 @@ if __name__ == "__main__":
                 print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                     epoch, batch_idx * len(data), len(train_loader.dataset),
                            100. * batch_idx / len(train_loader), loss.item() / len(data)))
-        scheduler.step(train_loss)
-        zT = torch.randn(64, latent_s).to(dev)
-        z_t = zT
-        for t in range(T_MAX - 1, 0, -1):
-            t_t = torch.ones(64, 1).to(dev) * t
-            if t > 0:
-                sigma = ((1 - dif.alphas[t - 1]) / (1 - dif.alphas[t]) * dif.betas[t]).sqrt()
-            else:
-                sigma = 0
-            z_t = trans(z_t, pos_enc(t_t)) + torch.randn(z_t.shape).to(dev) * sigma
-            if (t - 1) % 100 == 0:
-                x_t = dec(z_t, pos_enc(t_t - 1)).view(-1, 784)
-                save_image(get_X_back(x_t).view(64, 1, 28, 28),
-                           './Samples/Generated/sample_gen_' + str(epoch) + '_' + str(t - 1) + '.png')
-                x_t, _ = dif.diffuse(x0, (torch.ones(x0.shape[0]).to(dev) * t - 1).long(),
-                                     torch.zeros(x0.shape[0]).long().to(dev))
-                save_image(get_X_back(x_t).view(x0.shape[0], 1, 28, 28),
-                           './Samples/Real/sample_real_' + str(epoch) + '_' + str(t - 1) + '.png')
 
+        save_image(get_X_back(model.sample(64)).view(64, 1, 32, 32), './Samples/Generated/sample_gen_' + str(epoch)
+                   + '.png')
+        scheduler.step(train_loss)
         print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / len(train_loader.dataset)))
 
 

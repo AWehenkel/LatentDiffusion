@@ -34,7 +34,7 @@ class Encoder(nn.Module):
                                  nn.Linear(h_dim, z_dim))
 
     def forward(self, x):
-        return self.net(x)
+        return self.net(x.view(x.shape[0], -1))
 
 
 class TemporalEncoder(nn.Module):
@@ -48,14 +48,20 @@ class TemporalEncoder(nn.Module):
         self.net = nn.Sequential(*net)
 
     def forward(self, x, t):
-        return self.net(torch.cat((x, t), 1))
+        return self.net(torch.cat((x.view(x.shape[0], -1), t), 1))
 
 
 class SimpleImageEncoder(nn.Module):
     def __init__(self, x_dim, z_dim, layers, t_dim=1, act=nn.ReLU):
         super(SimpleImageEncoder, self).__init__()
-        self.conv = nn.Sequential(nn.Conv2d(x_dim[0], 16, 3, padding=1), act(), nn.MaxPool2d(2, 2),
-                                  nn.Conv2d(16, 4, 3, padding=1), act(), nn.MaxPool2d(2, 2))
+        image_channels = x_dim[0]
+        init_channels = 8
+        kernel_size = 4
+        self.conv = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2), act(), #nn.MaxPool2d(2, 2),
+                                  nn.Conv2d(init_channels, init_channels*2, kernel_size, padding=1, stride=2), act(),
+                                  nn.Conv2d(init_channels*2, init_channels*4, kernel_size, padding=1, stride=2), act(),
+                                  nn.Conv2d(init_channels*4, 64, kernel_size, padding=0, stride=2), act())
+                                  #nn.MaxPool2d(2, 2))
         self.features_dim = self.conv(torch.zeros(x_dim).unsqueeze(0)).shape[1:]
         features_dim = self.features_dim[0] * self.features_dim[1] * self.features_dim[2]
         self.fc = TemporalEncoder(features_dim, z_dim, layers, t_dim, act)
