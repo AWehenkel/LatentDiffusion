@@ -19,7 +19,7 @@ class TemporalDecoder(nn.Module):
 
 
 class SimpleImageDecoder(nn.Module):
-    def __init__(self, features_dim, z_dim, layers, t_dim=1, act=nn.ReLU):
+    def __init__(self, features_dim, z_dim, layers, t_dim=1, act=nn.ReLU, out_c=1):
         super(SimpleImageDecoder, self).__init__()
         self.features_dim = features_dim
         features_dim = self.features_dim[0] * self.features_dim[1] * self.features_dim[2]
@@ -32,7 +32,7 @@ class SimpleImageDecoder(nn.Module):
                                                      padding=1), act(),
                                   nn.ConvTranspose2d(init_channels * 4, init_channels * 2, kernel_size, stride=2,
                                                      padding=1), act(),
-                                  nn.ConvTranspose2d(init_channels * 2, 1, kernel_size, stride=2,
+                                  nn.ConvTranspose2d(init_channels * 2, out_c, kernel_size, stride=2,
                                                      padding=1))
 
     def forward(self, z, t):

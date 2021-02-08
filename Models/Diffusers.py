@@ -40,4 +40,4 @@ class TransitionNet(nn.Module):
         self.net = nn.Sequential(*net)
 
     def forward(self, z, t):
-        return self.net(torch.cat((z, t), 1))
+        return self.net(torch.cat((z, t), 1)) #+ z
