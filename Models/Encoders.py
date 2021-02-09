@@ -47,8 +47,10 @@ class TemporalEncoder(nn.Module):
         net.pop()
         self.net = nn.Sequential(*net)
 
-    def forward(self, x, t):
-        return self.net(torch.cat((x.view(x.shape[0], -1), t), 1))
+    def forward(self, x, t=None):
+        if t is not None:
+            x = torch.cat((x.view(x.shape[0], -1), t), 1)
+        return self.net(x.view(x.shape[0], -1))
 
 
 class SimpleImageEncoder(nn.Module):
@@ -66,6 +68,6 @@ class SimpleImageEncoder(nn.Module):
         features_dim = self.features_dim[0] * self.features_dim[1] * self.features_dim[2]
         self.fc = TemporalEncoder(features_dim, z_dim, layers, t_dim, act)
 
-    def forward(self, x, t):
+    def forward(self, x, t=None):
         features = self.conv(x).view(x.shape[0], -1)
         return self.fc(features, t)

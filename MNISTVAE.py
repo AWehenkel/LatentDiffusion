@@ -3,7 +3,7 @@ import torch.optim as optim
 from torchvision.utils import save_image
 from torchvision import datasets, transforms
 import numpy as np
-from Models import CNNDiffusionModel
+from Models import VAEModel
 
 
 def add_noise(x):
@@ -93,28 +93,21 @@ class ToTensor(object):
 
 
 import wandb
-wandb.init(project="latent_diffusion", entity="awehenkel")
+#wandb.init(project="latent_diffusion", entity="awehenkel")
 
 
 if __name__ == "__main__":
     bs = 100
     config = {
         'data': 'MNIST',
-        'T_MAX': 30,
         'latent_s': 60,
-        't_emb_s': 30,
-        'CNN': False,
+        'CNN': True,
         'enc_w': 200,
         'enc_l': 3,
         'dec_w': 200,
         'dec_l': 3,
-        'trans_w': 200,
-        'trans_l': 3,
-        "beta_min": 1e-2,
-        "beta_max": .45,
-        'simplified_trans': True
     }
-    wandb.config.update(config)
+    #wandb.config.update(config)
     train_loader, test_loader = getMNISTDataLoader(bs)
     img_size = [1, 32, 32]
     config["img_size"] = img_size
@@ -130,12 +123,12 @@ if __name__ == "__main__":
     x_std[x_std == 0.] = 1.
 
     dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    model = CNNDiffusionModel(**config).to(dev)
+    model = VAEModel(**config).to(dev)
 
     optimizer = optim.Adam(model.parameters(), lr=.001)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
 
-    wandb.watch(model)
+    #wandb.watch(model)
     def get_X_back(x):
         nb_x = x.shape[0]
         x = x * x_std.to(dev).unsqueeze(0).expand(nb_x, -1) + x_mean.to(dev).unsqueeze(0).expand(nb_x, -1)
@@ -165,7 +158,7 @@ if __name__ == "__main__":
         save_image(samples, './Samples/Generated/sample_gen_' + str(epoch) + '.png')
         scheduler.step(train_loss)
         print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / len(train_loader.dataset)))
-        wandb.log({"Train Loss": train_loss / len(train_loader.dataset), "Samples": [wandb.Image(samples)]})
+        #wandb.log({"Train Loss": train_loss / len(train_loader.dataset), "Samples": [wandb.Image(samples)]})
 
     for i in range(150):
         train(i)

@@ -14,8 +14,10 @@ class TemporalDecoder(nn.Module):
         self.net = nn.Sequential(*net)
         self.out_dim = out_dim
 
-    def forward(self, z, t):
-        return self.net(torch.cat((z, t), 1)).view(z.shape[0], *self.out_dim)
+    def forward(self, z, t=None):
+        if t is not None:
+            z = torch.cat((z, t), 1)
+        return self.net(z).view(z.shape[0], *self.out_dim)
 
 
 class SimpleImageDecoder(nn.Module):
@@ -35,6 +37,6 @@ class SimpleImageDecoder(nn.Module):
                                   nn.ConvTranspose2d(init_channels * 2, out_c, kernel_size, stride=2,
                                                      padding=1))
 
-    def forward(self, z, t):
+    def forward(self, z, t=None):
         features = self.fc(z, t)
         return self.conv(features)

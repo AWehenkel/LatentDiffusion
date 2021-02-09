@@ -15,29 +15,6 @@ def add_noise(x):
     x = x / 256
     return x
 
-def getMNISTDataLoader(bs):
-    # MNIST Dataset
-    train_dataset = datasets.MNIST(root='./mnist_data/', train=True, download=True, transform=transforms.Compose([
-                                      transforms.Resize((32, 32)),
-                                      #transforms.ToTensor(),
-                                      #add_noise,
-                                      ToTensor(),
-        AddUniformNoise()
-                                  ]))
-    test_dataset = datasets.MNIST(root='./mnist_data/', train=False, download=True,
-                                  transform=transforms.Compose([
-                                      transforms.Resize((32, 32)),
-                                      #transforms.ToTensor(),
-                                      #add_noise,
-                                      ToTensor(),
-                                      AddUniformNoise()
-                                  ]))
-
-    # Data Loader (Input Pipeline)
-    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False)
-
-    return train_loader, test_loader
 
 def getCIFAR10DataLoader(bs):
     # MNIST Dataset
@@ -64,34 +41,6 @@ def getCIFAR10DataLoader(bs):
     return train_loader, test_loader
 
 
-def logit(x, alpha=1E-6):
-    y = alpha + (1.-2*alpha)*x
-    return np.log(y) - np.log(1. - y)
-
-
-def logit_back(x, alpha=1E-6):
-    y = torch.sigmoid(x)
-    return (y - alpha)/(1.-2*alpha)
-
-
-class AddUniformNoise(object):
-    def __init__(self, alpha=1E-6):
-        self.alpha = alpha
-    def __call__(self,samples):
-        samples = np.array(samples,dtype = np.float32)
-        samples += np.random.uniform(size = samples.shape)
-        samples = logit(samples/256., self.alpha)
-        return samples
-
-
-class ToTensor(object):
-    def __init__(self):
-        pass
-    def __call__(self,samples):
-        samples = torch.from_numpy(np.array(samples,dtype = np.float32)).float()
-        return samples
-
-
 import wandb
 wandb.init(project="latent_diffusion", entity="awehenkel")
 
@@ -99,13 +48,13 @@ wandb.init(project="latent_diffusion", entity="awehenkel")
 if __name__ == "__main__":
     bs = 100
     config = {
-        'data': 'MNIST',
+        'data': 'CIFAR10',
         'T_MAX': 30,
         'latent_s': 60,
         't_emb_s': 30,
-        'CNN': False,
-        'enc_w': 200,
-        'enc_l': 3,
+        'CNN': True,
+        'enc_w': 400,
+        'enc_l': 4,
         'dec_w': 200,
         'dec_l': 3,
         'trans_w': 200,
@@ -115,9 +64,10 @@ if __name__ == "__main__":
         'simplified_trans': True
     }
     wandb.config.update(config)
-    train_loader, test_loader = getMNISTDataLoader(bs)
-    img_size = [1, 32, 32]
+    train_loader, test_loader = getCIFAR10DataLoader(bs)
+    img_size = [3, 32, 32]
     config["img_size"] = img_size
+
     # Compute Mean abd std per pixel
     x_mean = 0
     x_mean2 = 0
@@ -139,7 +89,7 @@ if __name__ == "__main__":
     def get_X_back(x):
         nb_x = x.shape[0]
         x = x * x_std.to(dev).unsqueeze(0).expand(nb_x, -1) + x_mean.to(dev).unsqueeze(0).expand(nb_x, -1)
-        return logit_back(x)
+        return x
 
 
     def train(epoch):
