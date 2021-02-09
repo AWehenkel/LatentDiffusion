@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class DataDiffuser(nn.Module):
-    def __init__(self, beta_min=1e-4, beta_max=.02, t_min=1, t_max=1000):
+    def __init__(self, beta_min=1e-4, beta_max=.02, t_min=0, t_max=1000):
         super(DataDiffuser, self).__init__()
         self.register_buffer('betas', torch.arange(beta_min, beta_max + 1e-10, (beta_max - beta_min) / (t_max - t_min)))
         self.register_buffer('alphas_t', (1 - self.betas))

@@ -185,15 +185,18 @@ if __name__ == "__main__":
     bs = 100
     config = {
         'data': 'MNIST',
-        'T_MAX': 30,
-        'latent_s': 30,
-        't_emb_s': 20,
-        'CNN': False,
-        'enc_net': [200] * 3,
-        'dec_net': [200] * 3,
-        'trans_net': [150] * 3,
+        'T_MAX': 100,
+        'latent_s': 60,
+        't_emb_s': 30,
+        'CNN': True,
+        'enc_w': 200,
+        'enc_l': 3,
+        'dec_w': 200,
+        'dec_l': 3,
+        'trans_w': 200,
+        'trans_l': 3,
         "beta_min": 1e-2,
-        "beta_max": .5
+        "beta_max": .25
     }
     wandb.config.update(config)
     train_loader, test_loader = getMNISTDataLoader(bs)
@@ -250,5 +253,5 @@ if __name__ == "__main__":
         print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / len(train_loader.dataset)))
         wandb.log({"Train Loss": train_loss / len(train_loader.dataset), "Samples": [wandb.Image(samples)]})
 
-    for i in range(500):
+    for i in range(150):
         train(i)
