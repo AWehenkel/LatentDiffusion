@@ -3,7 +3,7 @@ import torch.optim as optim
 from torchvision.utils import save_image
 from torchvision import datasets, transforms
 import numpy as np
-from Models import CNNDiffusionModel
+from Models import LatentDiffusionModel
 
 
 def add_noise(x):

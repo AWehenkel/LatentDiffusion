@@ -82,9 +82,9 @@ class ProperDiffusionModel(nn.Module):
         return x_0
 
 
-class CNNDiffusionModel(nn.Module):
+class LatentDiffusionModel(nn.Module):
     def __init__(self, **kwargs):
-        super(CNNDiffusionModel, self).__init__()
+        super(LatentDiffusionModel, self).__init__()
         self.T_MAX = kwargs['T_MAX']
         self.latent_s = kwargs['latent_s']
         self.t_emb_s = kwargs['t_emb_s']
@@ -93,6 +93,7 @@ class CNNDiffusionModel(nn.Module):
         self.register_buffer("beta_max", torch.tensor(kwargs['beta_max']))
         self.device = 'cpu'
         self.img_size = kwargs['img_size']
+        self.alpha = 0.
         if self.t_emb_s > 1:
             self.pos_enc = PositionalEncoder(self.t_emb_s // 2)
         else:
@@ -133,7 +134,9 @@ class CNNDiffusionModel(nn.Module):
         x_t, sigma_x = self.dif.diffuse(x_t0, t, t0)
 
         mu_x_pred = self.dec(z_t, self.pos_enc(t.float().unsqueeze(1)))
-        KL_x = ((mu_x_pred - x_t.view(bs, *self.img_size)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
+        KL_x_uniform = ((mu_x_pred - x_t.view(bs, *self.img_size)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
+        KL_x_t = 1/t * ((mu_x_pred - x_t.view(bs, *self.img_size)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
+        KL_x = self.alpha * KL_x_t + (1 - self.alpha) * KL_x_uniform
 
         if self.simplified_trans:
             alpha_bar_t = self.dif.alphas[t].unsqueeze(1)#.expand(-1, self.latent_s)

@@ -3,7 +3,7 @@ import torch.optim as optim
 from torchvision.utils import save_image
 from torchvision import datasets, transforms
 import numpy as np
-from Models import CNNDiffusionModel
+from Models import LatentDiffusionModel
 
 
 def add_noise(x):
@@ -100,7 +100,7 @@ if __name__ == "__main__":
     bs = 100
     config = {
         'data': 'MNIST',
-        'T_MAX': 30,
+        'T_MAX': 50,
         'latent_s': 60,
         't_emb_s': 30,
         'CNN': False,
@@ -111,7 +111,7 @@ if __name__ == "__main__":
         'trans_w': 200,
         'trans_l': 3,
         "beta_min": 1e-2,
-        "beta_max": .45,
+        "beta_max": .9,
         'simplified_trans': True
     }
     wandb.config.update(config)
@@ -130,7 +130,7 @@ if __name__ == "__main__":
     x_std[x_std == 0.] = 1.
 
     dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    model = CNNDiffusionModel(**config).to(dev)
+    model = LatentDiffusionModel(**config).to(dev)
 
     optimizer = optim.Adam(model.parameters(), lr=.001)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
@@ -178,9 +178,10 @@ if __name__ == "__main__":
             test_loss += loss.item()
         return test_loss / len(test_loader.dataset)
 
-    for i in range(150):
+    for i in range(500):
         train_loss = train(i)
         test_loss = test(i)
+        model.alpha = i/500.
         samples = get_X_back(model.sample(64)).view(64, *img_size)
         #save_image(samples, './Samples/Generated/sample_gen_' + str(i) + '.png')
         print('====> Epoch: {} - Average Train loss: {:.4f} - Average Test Loss: {:.4f}'.format(i, train_loss, test_loss))
