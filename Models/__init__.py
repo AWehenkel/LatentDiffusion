@@ -2,5 +2,5 @@ from .Decoders import *
 from .Diffusers import *
 from .Encoders import *
 from .Utils import *
-from .DiffusionModels import CNNDiffusionModel
+from .DiffusionModels import CNNDiffusionModel, ProperDiffusionModel
 from .VAEModels import VAEModel

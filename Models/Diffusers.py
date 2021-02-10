@@ -9,7 +9,9 @@ class DataDiffuser(nn.Module):
         self.register_buffer('alphas_t', (1 - self.betas))
         self.register_buffer('alphas', self.alphas_t.log().cumsum(0).exp())
 
-    def diffuse(self, x_t0, t, t0=0):
+    def diffuse(self, x_t0, t, t0=0, noise=None):
+        if noise is None:
+            noise = torch.randn(x_t0.shape).to(x_t0.device)
         alpha_t0 = 1 * (t0 == 0).float() + (1 - (t0 == 0).float()) * self.alphas[t0 - 1]
 
         mu = x_t0 * (self.alphas[t] / alpha_t0).sqrt().unsqueeze(1).expand(-1, x_t0.shape[1]).float()
@@ -17,7 +19,7 @@ class DataDiffuser(nn.Module):
         sigma_t = ((self.alphas[t] / alpha_t0) * (1 - alpha_t0) + (1 - self.alphas[t])).sqrt()
         sigma = sigma_t.unsqueeze(1).expand(-1, x_t0.shape[1]).float()
         # sigma = (1 - self.alphas[t].unsqueeze(1).expand(-1, x_t0.shape[1]).float()).sqrt()
-        return mu + torch.randn(x_t0.shape).to(x_t0.device) * sigma, sigma_t
+        return mu + noise * sigma, sigma_t
 
     def prev_mean(self, x_t, x_0, t):
         alphas = self.alphas.unsqueeze(1).expand(-1, x_t.shape[1]).float()

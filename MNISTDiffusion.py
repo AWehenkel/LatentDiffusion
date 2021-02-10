@@ -161,11 +161,30 @@ if __name__ == "__main__":
                 print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                     epoch, batch_idx * len(data), len(train_loader.dataset),
                            100. * batch_idx / len(train_loader), loss.item() / len(data)))
-        samples = get_X_back(model.sample(64)).view(64, *img_size)
-        save_image(samples, './Samples/Generated/sample_gen_' + str(epoch) + '.png')
         scheduler.step(train_loss)
-        print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / len(train_loader.dataset)))
-        wandb.log({"Train Loss": train_loss / len(train_loader.dataset), "Samples": [wandb.Image(samples)]})
+        return train_loss / len(train_loader.dataset)
+
+    def test(epoch):
+        test_loss = 0
+        for batch_idx, (data, _) in enumerate(test_loader):
+            #data = sample
+            x0 = data.view(data.shape[0], -1).to(dev)
+
+            x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(bs, -1)) / x_std.to(dev).unsqueeze(0).expand(bs, -1)
+            optimizer.zero_grad()
+
+            loss = model.loss(x0)
+
+            test_loss += loss.item()
+        return test_loss / len(test_loader.dataset)
 
     for i in range(150):
-        train(i)
+        train_loss = train(i)
+        test_loss = test(i)
+        samples = get_X_back(model.sample(64)).view(64, *img_size)
+        #save_image(samples, './Samples/Generated/sample_gen_' + str(i) + '.png')
+        print('====> Epoch: {} - Average Train loss: {:.4f} - Average Test Loss: {:.4f}'.format(i, train_loss, test_loss))
+        wandb.log({"Train Loss": train_loss,
+                   "Test Loss": test_loss,
+                   "Samples": [wandb.Image(samples)],
+                   "epoch": i})
