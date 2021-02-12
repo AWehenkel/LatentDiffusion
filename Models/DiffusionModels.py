@@ -103,14 +103,19 @@ class LatentDiffusionModel(nn.Module):
         enc_net = [kwargs['enc_w']] * kwargs['enc_l']
         dec_net = [kwargs['dec_w']] * kwargs['dec_l']
         trans_net = [kwargs['trans_w']] * kwargs['trans_l']
+        self.x_diffusion = kwargs['x_diffusion']
+        x_t_emb_s = self.t_emb_s if self.x_diffusion else 0
 
         if self.CNN:
             self.enc = SimpleImageEncoder(self.img_size, self.latent_s, enc_net, t_dim=self.t_emb_s)
-            self.dec = SimpleImageDecoder(self.enc.features_dim, self.latent_s, dec_net, t_dim=self.t_emb_s,
+            self.dec = SimpleImageDecoder(self.enc.features_dim, self.latent_s, dec_net, t_dim=x_t_emb_s,
                                           out_c=self.img_size[0])
         else:
-            self.dec = TemporalDecoder(32**2, self.latent_s, dec_net, self.t_emb_s)
-            self.enc = TemporalEncoder(32**2, self.latent_s, enc_net, self.t_emb_s)
+            tot_size = 1
+            for i in self.img_size:
+                tot_size *= i
+            self.enc = TemporalEncoder(tot_size, self.latent_s, enc_net, self.t_emb_s)
+            self.dec = TemporalDecoder(tot_size, self.latent_s, dec_net, x_t_emb_s, out_dim=self.img_size)
 
         self.trans = TransitionNet(self.latent_s, trans_net, self.t_emb_s)
         self.dif = DataDiffuser(beta_min=self.beta_min, beta_max=self.beta_max, t_max=self.T_MAX)
@@ -131,12 +136,19 @@ class LatentDiffusionModel(nn.Module):
         t = torch.torch.distributions.Uniform(t0.float() + 1, torch.ones_like(t0) * self.T_MAX).sample().long().to(self.device)
 
         z_t, sigma_z = self.dif.diffuse(z_t0, t, t0)
-        x_t, sigma_x = self.dif.diffuse(x_t0, t, t0)
+        if self.x_diffusion:
+            x_t, sigma_x = self.dif.diffuse(x_t0, t, t0)
+            mu_x_pred = self.dec(z_t, self.pos_enc(t.float().unsqueeze(1)))
+            KL_x_uniform = ((mu_x_pred - x_t.view(bs, *self.img_size)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
+            KL_x_t = 1 / t * ((mu_x_pred - x_t.view(bs, *self.img_size)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
+            KL_x = self.alpha * KL_x_t + (1 - self.alpha) * KL_x_uniform
+        else:
+            x_t = x0
+            sigma_x = torch.ones_like(sigma_z)
+            mu_x_pred = self.dec(z_t)
+            KL_x = ((mu_x_pred - x_t.view(bs, *self.img_size)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
 
-        mu_x_pred = self.dec(z_t, self.pos_enc(t.float().unsqueeze(1)))
-        KL_x_uniform = ((mu_x_pred - x_t.view(bs, *self.img_size)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
-        KL_x_t = 1/t * ((mu_x_pred - x_t.view(bs, *self.img_size)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
-        KL_x = self.alpha * KL_x_t + (1 - self.alpha) * KL_x_uniform
+
 
         if self.simplified_trans:
             alpha_bar_t = self.dif.alphas[t].unsqueeze(1)#.expand(-1, self.latent_s)
@@ -176,8 +188,11 @@ class LatentDiffusionModel(nn.Module):
             else:
                 mu_z_pred = self.trans(z_t, self.pos_enc(t_t))
             z_t = mu_z_pred + torch.randn(z_t.shape, device=self.device) * sigma
-
-        x_0 = self.dec(z_t, self.pos_enc(torch.zeros((nb_samples, 1), device=self.device))).view(nb_samples, -1)
+        if self.x_diffusion:
+            mu_x_pred = self.dec(z_t, self.pos_enc(t.float().unsqueeze(1)))
+        else:
+            mu_x_pred = self.dec(z_t)
+        x_0 = mu_x_pred.view(nb_samples, -1)
 
         return x_0
 
