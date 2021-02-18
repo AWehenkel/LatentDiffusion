@@ -9,13 +9,13 @@ wandb.init(project="latent_diffusion", entity="awehenkel")
 if __name__ == "__main__":
     bs = 100
     config = {
-        'data': 'CIFAR10',
-        'latent_s': 60,
-        'CNN': True,
-        'enc_w': 200,
-        'enc_l': 3,
-        'dec_w': 200,
-        'dec_l': 3,
+        'data': 'MNIST',
+        'latent_s': 100,
+        'CNN': False,
+        'enc_w': 300,
+        'enc_l': 4,
+        'dec_w': 300,
+        'dec_l': 4,
     }
     #wandb.config.update(config)
     train_loader, test_loader, img_size = getDataLoader(config["data"], bs)

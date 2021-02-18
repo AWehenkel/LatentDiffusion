@@ -10,30 +10,36 @@ wandb.init(project="latent_diffusion", entity="awehenkel")
 if __name__ == "__main__":
     bs = 100
     config = {
-        'data': 'CIFAR10',
-        'T_MAX': 50,
-        'latent_s': 60,
-        't_emb_s': 30,
-        'CNN': True,
-        'enc_w': 200,
-        'enc_l': 3,
-        'dec_w': 200,
-        'dec_l': 3,
-        'trans_w': 200,
-        'trans_l': 3,
-        "beta_min": 1e-2,
-        "beta_max": .95,
+        'data': 'MNIST',
+        'T_MAX': 100,
+        'latent_s': 103,
+        't_emb_s': 43,
+        'CNN': False,
+        'enc_w': 20,
+        'enc_l': 4,
+        'dec_w': 20,
+        'dec_l': 4,
+        'trans_w': 20,
+        'trans_l': 4,
+        "beta_min": 0.01,
+        "beta_max": .99,
         'simplified_trans': True,
-        'x_diffusion': False
+        'x_diffusion': False,
+        'obs_sigma': .1,
+        'temporal_consistency': True
     }
     wandb.config.update(config)
+    config = wandb.config
     train_loader, test_loader, img_size = getDataLoader(config['data'], bs)
 
     config["img_size"] = img_size
     # Compute Mean abd std per pixel
     x_mean = 0
     x_mean2 = 0
+    #import torchvision
     for batch_idx, (cur_x, target) in enumerate(train_loader):
+    #    torchvision.utils.save_image(cur_x, 'ds_images.png')
+    #    exit()
         cur_x = cur_x.view(bs, -1).float()
         x_mean += cur_x.mean(0)
         x_mean2 += (cur_x ** 2).mean(0)
@@ -97,7 +103,8 @@ if __name__ == "__main__":
         train_loss = train(i)
         test_loss = test(i)
         model.alpha = i/500.
-        samples = get_X_back(model.sample(64)).view(64, *img_size)
+        samples = get_X_back(torch.cat(model.sample(8), 0)).view(-1, *img_size)
+
         print('====> Epoch: {} - Average Train loss: {:.4f} - Average Test Loss: {:.4f}'.format(i, train_loss, test_loss))
         wandb.log({"Train Loss": train_loss,
                    "Test Loss": test_loss,

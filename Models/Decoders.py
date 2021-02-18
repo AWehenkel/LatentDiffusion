@@ -40,3 +40,30 @@ class SimpleImageDecoder(nn.Module):
     def forward(self, z, t=None):
         features = self.fc(z, t)
         return self.conv(features)
+
+
+class ImprovedImageDecoder(nn.Module):
+    def __init__(self, features_dim, z_dim, layers, t_dim=1, act=nn.ReLU, out_c=1):
+        super(ImprovedImageDecoder, self).__init__()
+        self.features_dim = features_dim
+        features_dim = self.features_dim[0] * self.features_dim[1] * self.features_dim[2]
+        self.fc = TemporalDecoder(features_dim, z_dim, layers, t_dim, act, self.features_dim)
+        init_channels = 8
+        kernel_size = 4
+        self.conv = nn.Sequential(nn.ConvTranspose2d(self.features_dim[0], init_channels * 8, kernel_size, stride=1, padding=0),
+                                  act(),
+                                  nn.ConvTranspose2d(init_channels * 8, init_channels * 4, kernel_size, stride=2,
+                                                     padding=1), act(),
+                                  nn.ConvTranspose2d(init_channels * 4, init_channels * 2, kernel_size, stride=2,
+                                                     padding=1), act(),
+                                  nn.ConvTranspose2d(init_channels * 2, 10, kernel_size, stride=2,
+                                                     padding=1), act(),
+                                  nn.ConvTranspose2d(10, 10, kernel_size, stride=2,
+                                                     padding=1), act(),
+                                  nn.Conv2d(10, 5, 2, 1), act(),
+                                  nn.Conv2d(5, out_c, 2, 2, 1)
+                                  )
+
+    def forward(self, z, t=None):
+        features = self.fc(z, t)
+        return self.conv(features)

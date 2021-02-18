@@ -1,7 +1,6 @@
 import torch.nn as nn
 import torch
 
-
 class PositionalEncoder(nn.Module):
     def __init__(self, dim):
         super(PositionalEncoder, self).__init__()
