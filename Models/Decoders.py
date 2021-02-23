@@ -21,7 +21,7 @@ class TemporalDecoder(nn.Module):
 
 
 class SimpleImageDecoder(nn.Module):
-    def __init__(self, features_dim, z_dim, layers, t_dim=1, act=nn.ReLU, out_c=1):
+    def __init__(self, features_dim, z_dim, layers, t_dim=1, pos_enc=None, act=nn.ReLU, out_c=1):
         super(SimpleImageDecoder, self).__init__()
         self.features_dim = features_dim
         features_dim = self.features_dim[0] * self.features_dim[1] * self.features_dim[2]
@@ -36,14 +36,16 @@ class SimpleImageDecoder(nn.Module):
                                                      padding=1), act(),
                                   nn.ConvTranspose2d(init_channels * 2, out_c, kernel_size, stride=2,
                                                      padding=1))
+        self.pos_enc = pos_enc
 
     def forward(self, z, t=None):
+        t = self.pos_enc(t) if self.pos_enc is not None else t
         features = self.fc(z, t)
         return self.conv(features)
 
 
 class ImprovedImageDecoder(nn.Module):
-    def __init__(self, features_dim, z_dim, layers, t_dim=1, act=nn.ReLU, out_c=1):
+    def __init__(self, features_dim, z_dim, layers, t_dim=1, pos_enc=None, act=nn.ReLU, out_c=1):
         super(ImprovedImageDecoder, self).__init__()
         self.features_dim = features_dim
         features_dim = self.features_dim[0] * self.features_dim[1] * self.features_dim[2]
@@ -63,7 +65,10 @@ class ImprovedImageDecoder(nn.Module):
                                   nn.Conv2d(10, 5, 2, 1), act(),
                                   nn.Conv2d(5, out_c, 2, 2, 1)
                                   )
+        self.pos_enc = pos_enc
+
 
     def forward(self, z, t=None):
+        t = self.pos_enc(t) if self.pos_enc is not None else t
         features = self.fc(z, t)
         return self.conv(features)

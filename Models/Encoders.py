@@ -53,7 +53,7 @@ class TemporalEncoder(nn.Module):
 
 
 class SimpleImageEncoder(nn.Module):
-    def __init__(self, x_dim, z_dim, layers, t_dim=1, act=nn.ReLU):
+    def __init__(self, x_dim, z_dim, layers, t_dim=1, pos_enc=None, act=nn.ReLU):
         super(SimpleImageEncoder, self).__init__()
         image_channels = x_dim[0]
         init_channels = 8
@@ -66,7 +66,10 @@ class SimpleImageEncoder(nn.Module):
         self.features_dim = self.conv(torch.zeros(x_dim).unsqueeze(0)).shape[1:]
         features_dim = self.features_dim[0] * self.features_dim[1] * self.features_dim[2]
         self.fc = TemporalEncoder(features_dim, z_dim, layers, t_dim, act)
+        self.pos_enc = pos_enc
 
     def forward(self, x, t=None):
+        t = self.pos_enc(t) if self.pos_enc is not None else t
         features = self.conv(x).view(x.shape[0], -1)
         return self.fc(features, t)
+

@@ -30,7 +30,7 @@ class VAEModel(nn.Module):
         KL_z = (-log_sigma_z + (mu_z ** 2)/2 + torch.exp(log_sigma_z)/2).sum(1)
 
         # Decoding
-        mu_x_pred = self.dec(mu_z + torch.exp(log_sigma_z) * torch.randn(mu_z.shape))
+        mu_x_pred = self.dec(mu_z + torch.exp(log_sigma_z) * torch.randn(mu_z.shape, device=self.device))
         KL_x = ((mu_x_pred.view(bs, -1) - x0) ** 2).view(bs, -1).sum(1)
 
 
@@ -38,6 +38,11 @@ class VAEModel(nn.Module):
         loss = KL_x.mean(0) + KL_z.mean(0)
 
         return loss
+
+    def forward(self, x0):
+        mu_z, log_sigma_z = torch.split(self.enc(x0.view(-1, *self.img_size)), self.latent_s, 1)
+        mu_x_pred = self.dec(mu_z + torch.exp(log_sigma_z) * torch.randn(mu_z.shape, device=self.device))
+        return mu_x_pred
 
     def to(self, device):
         super().to(device)

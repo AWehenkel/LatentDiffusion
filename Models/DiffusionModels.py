@@ -3,6 +3,11 @@ import torch.nn as nn
 from Models import TemporalDecoder, TemporalEncoder, DataDiffuser, TransitionNet, SimpleImageDecoder, SimpleImageEncoder, PositionalEncoder, StupidPositionalEncoder, ImprovedImageDecoder
 
 
+decoders = {'ImprovedImageDecoder': ImprovedImageDecoder,
+            'SimpleImageEncoder': ImprovedImageDecoder,
+            'TemporalDecoder': TemporalDecoder}
+
+
 class ProperDiffusionModel(nn.Module):
     def __init__(self, **kwargs):
         super(ProperDiffusionModel, self).__init__()
@@ -110,9 +115,9 @@ class LatentDiffusionModel(nn.Module):
         self.temporal_consistency = kwargs['temporal_consistency']
         x_t_emb_s = self.t_emb_s if self.x_diffusion or self.temporal_consistency else 0
 
-        if self.CNN:
+        if kwargs['decoder_type'] != 'TemporalDecoder':
             self.enc = SimpleImageEncoder(self.img_size, self.latent_s, enc_net, t_dim=self.t_emb_s)
-            self.dec = SimpleImageDecoder(self.enc.features_dim, self.latent_s, dec_net, t_dim=x_t_emb_s,
+            self.dec = decoders[kwargs['decoder_type']](self.enc.features_dim, self.latent_s, dec_net, t_dim=x_t_emb_s,
                                           out_c=self.img_size[0])
         else:
             tot_size = 1
@@ -153,9 +158,9 @@ class LatentDiffusionModel(nn.Module):
             mu_x_pred = self.dec(z_t0 + torch.randn(z_t0.shape, device=self.device) * self.dif.betas[0], self.pos_enc(t.float().unsqueeze(1)*0))
             # Normal distribution for p(x|z)
             KL_x = ((mu_x_pred - x_t.view(bs, *self.img_size)) ** 2).view(bs, -1).sum(1) / sigma_x ** 2
-            mu_x_pred = self.dec(z_t, self.pos_enc(t.float().unsqueeze(1)))
+            mu_x_pred = self.dec(z_t + torch.randn(z_t.shape, device=self.device) * sigma_z, self.pos_enc(t.float().unsqueeze(1)))
             z_t_pred = self.enc(mu_x_pred, self.pos_enc(t.float().unsqueeze(1)))
-            KL_temporal_consistency = ((z_t_pred - z_t) ** 2).sum(1)
+            KL_temporal_consistency = (((z_t_pred - z_t) ** 2)/sigma_z).sum(1)
             KL_x += KL_temporal_consistency
         else:
             x_t = x0

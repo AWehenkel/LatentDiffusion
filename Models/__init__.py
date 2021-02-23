@@ -4,3 +4,4 @@ from .Encoders import *
 from .Utils import *
 from .DiffusionModels import LatentDiffusionModel, ProperDiffusionModel
 from .VAEModels import VAEModel
+from .HeatDiffusion import AugmentedVAEModel, CNNHeatedLatentDiffusion

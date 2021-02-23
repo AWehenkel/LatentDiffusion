@@ -93,7 +93,7 @@ class ToTensor(object):
 
 
 import wandb
-wandb.init(project="latent_diffusion", entity="awehenkel")
+wandb.init(project="diffusion", entity="awehenkel")
 
 
 if __name__ == "__main__":

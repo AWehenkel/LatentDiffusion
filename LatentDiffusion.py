@@ -11,25 +11,27 @@ if __name__ == "__main__":
     bs = 100
     config = {
         'data': 'MNIST',
-        'T_MAX': 100,
-        'latent_s': 103,
-        't_emb_s': 43,
+        'T_MAX': 30,
+        'latent_s': 20,
+        't_emb_s': 30,
         'CNN': False,
-        'enc_w': 20,
+        'enc_w': 200,
         'enc_l': 4,
-        'dec_w': 20,
+        'dec_w': 200,
         'dec_l': 4,
-        'trans_w': 20,
+        'trans_w': 200,
         'trans_l': 4,
         "beta_min": 0.01,
         "beta_max": .99,
         'simplified_trans': True,
         'x_diffusion': False,
         'obs_sigma': .1,
-        'temporal_consistency': True
+        'temporal_consistency': True,
+        'decoder_type': 'TemporalDecoder'
     }
     wandb.config.update(config)
     config = wandb.config
+
     train_loader, test_loader, img_size = getDataLoader(config['data'], bs)
 
     config["img_size"] = img_size
@@ -58,9 +60,7 @@ if __name__ == "__main__":
     def get_X_back(x):
         nb_x = x.shape[0]
         x = x * x_std.to(dev).unsqueeze(0).expand(nb_x, -1) + x_mean.to(dev).unsqueeze(0).expand(nb_x, -1)
-        if config['data'] == 'CIFAR10':
-            return x
-        return logit_back(x)
+        return x
 
 
     def train(epoch):
@@ -103,7 +103,10 @@ if __name__ == "__main__":
         train_loss = train(i)
         test_loss = test(i)
         model.alpha = i/500.
-        samples = get_X_back(torch.cat(model.sample(8), 0)).view(-1, *img_size)
+        if False:
+            samples = get_X_back(torch.cat(model.sample(8), 0)).view(-1, *img_size)
+        else:
+            samples = get_X_back(model.sample(64)[-1]).view(-1, *img_size)
 
         print('====> Epoch: {} - Average Train loss: {:.4f} - Average Test Loss: {:.4f}'.format(i, train_loss, test_loss))
         wandb.log({"Train Loss": train_loss,
