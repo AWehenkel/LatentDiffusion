@@ -3,7 +3,8 @@ import torch.optim as optim
 from Models import CNNHeatedLatentDiffusion
 import wandb
 from utils import getDataLoader, logit_back
-wandb.init(project="heated_vae", entity="awehenkel")
+wandb.init(project="heat_diffusion", entity="awehenkel")
+import torch.nn as nn
 
 
 if __name__ == "__main__":
@@ -12,12 +13,17 @@ if __name__ == "__main__":
         'data': 'Heated_CIFAR10',
         'latent_s': 100,
         'CNN': True,
-        'enc_w': 500,
-        'enc_l': 4,
-        'dec_w': 500,
-        'dec_l': 4,
+        'enc_w': 300,
+        'enc_l': 1,
+        'dec_w': 300,
+        'dec_l': 1,
+        'trans_w': 300,
+        'trans_l': 3,
+        "beta_min": 0.01,
+        "beta_max": .99,
+        'simplified_trans': True,
         't_emb_s': 100,
-        'nb_steps': 100,
+        'T': 100,
         'level_max': 4.,
         'debug': False
     }
@@ -26,8 +32,8 @@ if __name__ == "__main__":
 
     wandb.config.update(config)
     config = wandb.config
-    train_loader, test_loader, img_size = getDataLoader(config["data"], bs, nb_steps=config['nb_steps'], level_max=config['level_max'])
-    _, test_loader, _ = getDataLoader("CIFAR10", bs, nb_steps=config['nb_steps'], level_max=config['level_max'])
+    train_loader, test_loader, img_size = getDataLoader(config["data"], bs, T=config['T'], level_max=config['level_max'])
+    _, test_loader, _ = getDataLoader("CIFAR10", bs, T=config['T'], level_max=config['level_max'])
 
     config["img_size"] = img_size
     # Compute Mean abd std per pixel
@@ -55,9 +61,17 @@ if __name__ == "__main__":
     model = CNNHeatedLatentDiffusion(**config).to(dev)
 
     optimizer = optim.Adam(model.parameters(), lr=.001)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5,
+                                                           patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
 
     wandb.watch(model)
+
+    def get_X_back(x0):
+        nb_x = x0.shape[0]
+        x = x0 * x0_std.to(dev).unsqueeze(0).expand(nb_x, -1) + x0_mean.to(dev).unsqueeze(0).expand(nb_x, -1)
+        return x
+
+
     if debug:
         [x0, xt, t], _ = next(iter(train_loader))
         x0_debug = x0[[1]].expand(bs, -1, -1, -1)
@@ -78,14 +92,18 @@ if __name__ == "__main__":
             x0 = (x0 - x0_mean.to(dev).unsqueeze(0).expand(x0.shape[0], -1)) / x0_std.to(dev).unsqueeze(0).expand(x0.shape[0], -1)
             xt = (xt - xt_mean.to(dev).unsqueeze(0).expand(xt.shape[0], -1)) / xt_std.to(dev).unsqueeze(0).expand(xt.shape[0], -1)
 
+
+
             optimizer.zero_grad()
 
             loss = model.loss(x0, xt, t)
 
             loss.backward()
+
+            #nn.utils.clip_grad_norm_(model.parameters(), .0000001)
+
             train_loss += loss.item()
             optimizer.step()
-
             if batch_idx % 100 == 0:
                 print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                     epoch, batch_idx * bs, len(train_loader.dataset),
@@ -95,20 +113,23 @@ if __name__ == "__main__":
 
     def test(epoch):
         test_loss = 0
-        for batch_idx, (data, _) in enumerate(test_loader):
+        for batch_idx, (x0, _) in enumerate(test_loader):
             #data = sample
             if debug:
                 x0 = x.to(dev).view(x.shape[0], -1)
-                t = torch.zeros(x.shape[0], 1).to(dev)
+                t = torch.zeros(x.shape[0], 1).to(dev).long()
             else:
-                t = torch.zeros((data.shape[0], 1), device=dev)
-                x0 = data.view(data.shape[0], -1).to(dev)
+                x0 = x0.view(x0.shape[0], -1).to(dev)
+                xt = x0
+                t = torch.zeros(x0.shape[0], 1).to(dev).long()
 
-
-            x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(x0.shape[0], -1)) / x_std.to(dev).unsqueeze(0).expand(x0.shape[0], -1)
+            x0 = (x0 - x0_mean.to(dev).unsqueeze(0).expand(x0.shape[0], -1)) / x0_std.to(dev).unsqueeze(0).expand(
+                x0.shape[0], -1)
+            xt = (xt - xt_mean.to(dev).unsqueeze(0).expand(xt.shape[0], -1)) / xt_std.to(dev).unsqueeze(0).expand(
+                xt.shape[0], -1)
             optimizer.zero_grad()
 
-            loss = model.loss(x0, t)
+            loss = model.loss(x0, xt,  t)
 
             test_loss += loss.item()
         reconstructed_test = model(x0[:64], t[:64])
@@ -122,6 +143,7 @@ if __name__ == "__main__":
         samples_1 = get_X_back(model.sample(64)).view(64, *img_size)
         samples_8 = get_X_back(model.sample(64, temperature=.8)).view(64, *img_size)
         print('====> Epoch: {} - Average Train loss: {:.4f} - Average Test Loss: {:.4f}'.format(i, train_loss, test_loss))
+
         wandb.log({"Train Loss": train_loss,
                    "Test Loss": test_loss,
                    "Samples T°100": [wandb.Image(samples_1)],
@@ -129,3 +151,4 @@ if __name__ == "__main__":
                    "Reconstructed": [wandb.Image(x_rec)],
                    "Data": [wandb.Image(x)],
                    "epoch": i})
+

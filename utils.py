@@ -31,7 +31,7 @@ class RandomBlur(object):
         return format_string
 
 
-def getDataLoader(dataset, bs, nb_steps=100, level_max=5.):
+def getDataLoader(dataset, bs, T=100, level_max=5.):
     if dataset == "MNIST":
         # MNIST Dataset
         train_dataset = datasets.MNIST(root='./mnist_data/', train=True, download=True, transform=transforms.Compose([
@@ -74,13 +74,13 @@ def getDataLoader(dataset, bs, nb_steps=100, level_max=5.):
                                          transform=transforms.Compose([
                                             transforms.Resize(32),
                                             transforms.RandomHorizontalFlip(),
-                                            RandomBlur(nb_steps=nb_steps, level_max=level_max)
+                                            RandomBlur(T=T, level_max=level_max)
                                          ]))
         test_dataset = datasets.CIFAR10(root='./cifar10_data/', train=False, download=True,
                                         transform=transforms.Compose([
                                             transforms.Resize(32),
                                             transforms.RandomHorizontalFlip(),
-                                            RandomBlur(nb_steps=nb_steps, level_max=level_max)
+                                            RandomBlur(T=T, level_max=level_max)
                                         ]))
 
         # Data Loader (Input Pipeline)

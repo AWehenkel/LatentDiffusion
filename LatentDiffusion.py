@@ -22,7 +22,7 @@ if __name__ == "__main__":
         'trans_w': 200,
         'trans_l': 4,
         "beta_min": 0.01,
-        "beta_max": .99,
+        "beta_max": .4,
         'simplified_trans': True,
         'x_diffusion': False,
         'obs_sigma': .1,

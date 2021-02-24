@@ -70,7 +70,7 @@ class AugmentedVAEModel(nn.Module):
 # VAEs which takes temporal information and use it to
 
 class HeatedLatentDiffusionModel(nn.Module):
-    def __init__(self, encoder, decoder, diffuser, latent_transition):
+    def __init__(self, encoder=None, decoder=None, diffuser=None, latent_transition=None):
         super(HeatedLatentDiffusionModel, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -80,34 +80,40 @@ class HeatedLatentDiffusionModel(nn.Module):
     def loss(self, x0, xt, t):
         bs = x0.shape[0]
 
-        z0 = self.encoder(x0, t * 0)
-        x0_rec = self.decoder(z0, t)
-        KL_x0 = ((x0 - x0_rec)**2).view(bs, -1).mean(1)
+        z0 = self.encoder(x0.view(-1, *self.img_size), t * 0)
+        x0_rec = self.decoder(z0, t).view(bs, -1)
+        KL_x0 = ((x0 - x0_rec)**2).mean(1)
 
         # TODO, should I detach z0?
         zt = self.diffuser.diffuse(z0, t)
 
-        zt_rec = self.encoder(xt, t)
+        zt_rec = self.encoder(xt.view(-1, *self.img_size), t)
         KL_zt = ((zt - zt_rec)**2).mean(1)
 
-        xt_rec = self.decoder(zt, t)
+        xt_rec = self.decoder(zt, t).view(bs, -1)
         KL_xt = ((xt - xt_rec)**2).view(bs, -1).mean(1)
 
-        zt_1 = self.diffuser.reverse(z0, zt, t - 1)
+        zt_1 = self.diffuser.reverse(z0.detach(), zt, t - 1)
         zt_1_rec = self.latent_transition(zt, t - 1)
         KL_diffusion = ((zt_1 - zt_1_rec)**2).mean(1)
 
-        return (KL_x0 + KL_zt + KL_xt + KL_diffusion).mean()
+
+        return KL_x0.mean() + KL_zt.mean() + KL_xt.mean() + KL_diffusion.mean()#(KL_x0 + KL_zt + KL_xt + KL_diffusion).mean()
 
     def to(self, device):
         super().to(device)
         self.device = device
         return self
 
-    def sample(self, nb_samples=1, t0=0):
-        z_0 = self.latent_transition.sample(nb_samples, t0)
-        x_0 = self.decoder(z_0, torch.ones(nb_samples, 1) * t0)
-        return [x_0]
+    def sample(self, nb_samples=1, t0=0, temperature=1.):
+        z_0 = self.latent_transition.sample(nb_samples, t0, temperature=temperature)
+        x_0 = self.decoder(z_0, torch.ones(nb_samples, 1) * t0).view(nb_samples, -1)
+        return x_0
+
+    def forward(self, x, t):
+        z0 = self.encoder(x.view(-1, *self.img_size), t * 0)
+        x0_rec = self.decoder(z0, t).view(x.shape[0], -1)
+        return x0_rec
 
 
 class CNNHeatedLatentDiffusion(HeatedLatentDiffusionModel):
@@ -119,6 +125,8 @@ class CNNHeatedLatentDiffusion(HeatedLatentDiffusionModel):
         self.device = 'cpu'
         self.img_size = kwargs['img_size']
         self.t_emb_s = kwargs['t_emb_s']
+        self.register_buffer("beta_min", torch.tensor(kwargs['beta_min']))
+        self.register_buffer("beta_max", torch.tensor(kwargs['beta_max']))
 
         if self.t_emb_s > 1:
             self.t_emb_s = (self.t_emb_s // 2) * 2
@@ -130,12 +138,12 @@ class CNNHeatedLatentDiffusion(HeatedLatentDiffusionModel):
         dec_net = [kwargs['dec_w']] * kwargs['dec_l']
         trans_net = [kwargs['trans_w']] * kwargs['trans_l']
 
-        self.encoder = SimpleImageEncoder(self.img_size, self.latent_s*2, enc_net, t_dim=self.t_emb_s, pos_enc=pos_enc)
-        self.decoder = SimpleImageDecoder(self.enc.features_dim, self.latent_s, dec_net, t_dim=self.t_emb_s,
+        self.encoder = SimpleImageEncoder(self.img_size, self.latent_s, enc_net, t_dim=self.t_emb_s, pos_enc=pos_enc)
+        self.decoder = SimpleImageDecoder(self.encoder.features_dim, self.latent_s, dec_net, t_dim=self.t_emb_s,
                                           pos_enc=pos_enc, out_c=self.img_size[0])
 
         self.diffuser = AsynchronousDiffuser(betas_min=[self.beta_min]*4, betas_max=[self.beta_max]*4,
                                              ts_min=[0, 20, 40, 60], ts_max=[40, 60, 80, 100],
                                              var_sizes=[25, 25, 25, 25])
-        self.latent_transition = TransitionNet(self.latent_s, trans_net, self.t_emb_s, self.diffuser)
+        self.latent_transition = TransitionNet(self.latent_s, trans_net, self.t_emb_s, self.diffuser, pos_enc=pos_enc)
 
