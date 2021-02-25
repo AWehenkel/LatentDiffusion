@@ -24,14 +24,14 @@ class RandomBlur(object):
         t = np.random.randint(0, self.T + 1)
         level = self.level_max / self.T * t
         gaussImage = x.filter(ImageFilter.GaussianBlur(level))
-        return torch.tensor(np.array(x)), torch.tensor(np.array(gaussImage)).permute(2, 0, 1), torch.tensor([t])
+        return torch.tensor(np.array(x)).permute(2, 0, 1), torch.tensor(np.array(gaussImage)).permute(2, 0, 1), torch.tensor([t])
 
     def __repr__(self):
         format_string = self.__class__.__name__
         return format_string
 
 
-def getDataLoader(dataset, bs, T=100, level_max=5.):
+def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
     if dataset == "MNIST":
         # MNIST Dataset
         train_dataset = datasets.MNIST(root='./mnist_data/', train=True, download=True, transform=transforms.Compose([
@@ -86,6 +86,89 @@ def getDataLoader(dataset, bs, T=100, level_max=5.):
         # Data Loader (Input Pipeline)
         train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True)
         test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False)
+        img_size = [3, 32, 32]
+
+    elif dataset == "celeba":
+        dataroot = '/scratch/users/awehenkel/celeba/'
+        if not torch.cuda.is_available():
+            dataroot = '.'
+        image_size = 64
+        train_dataset = datasets.CelebA(dataroot, split='train', download=False,
+                                       transform=transforms.Compose([
+                                       transforms.Resize(image_size),
+                                       transforms.CenterCrop(image_size),
+                                       transforms.ToTensor(),
+                                       transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                                   ]))
+        # Create the dataloader
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=True,
+                                                 shuffle=True, num_workers=n_workers, drop_last=True)
+        dataroot = '/scratch/users/awehenkel/celeba/'
+        if not torch.cuda.is_available():
+            dataroot = '.'
+        image_size = 64
+        test_dataset = datasets.CelebA(dataroot, split='test',download=False,
+                                             transform=transforms.Compose([
+                                                 transforms.Resize(image_size),
+                                                 transforms.CenterCrop(image_size),
+                                                 transforms.ToTensor(),
+                                                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                                             ]))
+        # Create the dataloader
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
+                                                   shuffle=True, num_workers=n_workers, drop_last=True)
+        img_size = [3, 64, 64]
+
+    elif dataset == "Heated_celeba":
+        dataroot = '/scratch/users/awehenkel/celeba/'
+        if not torch.cuda.is_available():
+            dataroot = '.'
+        image_size = 64
+        train_dataset = datasets.CelebA(dataroot, split='train',download=False,
+                                                transform=transforms.Compose([
+                                                 transforms.Resize(image_size),
+                                                 transforms.CenterCrop(image_size),
+                                                 RandomBlur(T=T, level_max=level_max)
+                                             ]))
+        # Create the dataloader
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=True,
+                                                   shuffle=True, num_workers=n_workers, drop_last=True)
+        dataroot = '/scratch/users/awehenkel/celeba/'
+        if not torch.cuda.is_available():
+            dataroot = '.'
+        image_size = 64
+        test_dataset = datasets.CelebA(dataroot, split='test', download=False,
+                                            transform=transforms.Compose([
+                                                transforms.Resize(image_size),
+                                                transforms.CenterCrop(image_size),
+                                                RandomBlur(T=T, level_max=level_max)
+                                            ]))
+        # Create the dataloader
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
+                                                  shuffle=True, num_workers=n_workers, drop_last=True)
+
+        img_size = [3, 64, 64]
+
+    elif dataset == "Heated_CIFAR10_DEBUG":
+        # CIFAR10 Dataset
+        train_dataset = datasets.CIFAR10(root='./cifar10_data/', train=True, download=True,
+                                         transform=transforms.Compose([
+                                            transforms.Resize(32),
+                                            transforms.RandomHorizontalFlip(),
+                                            RandomBlur(T=T, level_max=level_max)
+                                         ]))
+        test_dataset = datasets.CIFAR10(root='./cifar10_data/', train=False, download=True,
+                                        transform=transforms.Compose([
+                                            transforms.Resize(32),
+                                            transforms.RandomHorizontalFlip(),
+                                            RandomBlur(T=T, level_max=level_max)
+                                        ]))
+
+
+
+        # Data Loader (Input Pipeline)
+        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True, drop_last=True, pin_memory=True)
+        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False, drop_last=True, pin_memory=True)
         img_size = [3, 32, 32]
     return train_loader, test_loader, img_size
 

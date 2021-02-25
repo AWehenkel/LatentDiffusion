@@ -93,7 +93,7 @@ class AsynchronousDiffuser(nn.Module):
 
 
 class TransitionNet(nn.Module):
-    def __init__(self, z_dim, layers, t_dim=1, diffuser=None, pos_enc=None, act=nn.ReLU):
+    def __init__(self, z_dim, layers, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=True):
         super(TransitionNet, self).__init__()
         layers = [z_dim + t_dim] + layers + [z_dim]
         net = []
@@ -105,10 +105,15 @@ class TransitionNet(nn.Module):
         self.z_dim = z_dim
         self.device = 'cpu'
         self.pos_enc = pos_enc
+        self.simplified_trans = simplified_trans
 
     def forward(self, z, t):
+
         t = self.pos_enc(t) if self.pos_enc is not None else t
-        return self.net(torch.cat((z, t), 1)) #+ z
+
+        mu_z_pred = self.net(torch.cat((z, t), 1))
+        return mu_z_pred#self.net(torch.cat((z, t), 1)) #+ z
+
 
     def to(self, device):
         super().to(device)
@@ -126,8 +131,23 @@ class TransitionNet(nn.Module):
             t_t = torch.ones(nb_samples, 1).to(self.device).long() * t
 
             mu_z_pred = self.forward(z_t, t_t)
-            z_t = self.diffuser.past_sample(mu_z_pred, t_t)
+            if self.simplified_trans:
+                alpha_bar_t = self.diffuser.alphas[t_t.view(-1), :]
+                alpha_t = self.diffuser.alphas_t[t_t.view(-1), :]
+                beta_t = self.diffuser.betas[t_t.view(-1), :]
 
+                is_dirac = torch.logical_or((1 - alpha_bar_t) == 0., alpha_t == 1.)
+                beta_t[is_dirac] = 1.
+                alpha_bar_t[is_dirac] = 0.
+                alpha_t[is_dirac] = 1.
+                #print(alpha_t.sqrt().min())
+                #print(((1 - alpha_t)/(1 - alpha_bar_t).sqrt()).max())
+                mu_z_pred = (z_t - (1 - alpha_t)/(1 - alpha_bar_t).sqrt() * mu_z_pred)/alpha_t.sqrt()
+                z_t = z_t * is_dirac.float() + (1 - is_dirac.float()) * self.diffuser.past_sample(mu_z_pred, t_t)
+                #print(z_t.norm(), z_t.std(), z_t.mean())
+            else:
+                z_t = self.diffuser.past_sample(mu_z_pred, t_t)
+        print(z_t.norm(), z_t.std(), z_t.mean())
         return z_t
 
 

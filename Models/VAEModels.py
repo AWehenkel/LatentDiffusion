@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from Models import TemporalDecoder, TemporalEncoder, DataDiffuser, TransitionNet, SimpleImageDecoder, SimpleImageEncoder, PositionalEncoder, StupidPositionalEncoder
+from Models import TemporalDecoder, TemporalEncoder, DCDecoder, DCEncoder, DataDiffuser, TransitionNet, SimpleImageDecoder, SimpleImageEncoder, PositionalEncoder, StupidPositionalEncoder
 
 
 class VAEModel(nn.Module):
@@ -15,9 +15,9 @@ class VAEModel(nn.Module):
         dec_net = [kwargs['dec_w']] * kwargs['dec_l']
 
         if self.CNN:
-            self.enc = SimpleImageEncoder(self.img_size, self.latent_s*2, enc_net, t_dim=0)
-            self.dec = SimpleImageDecoder(self.enc.features_dim, self.latent_s, dec_net, t_dim=0,
-                                          out_c=self.img_size[0])
+            self.enc = DCEncoder(self.img_size, self.latent_s*2, enc_net, t_dim=0)
+            self.dec = DCDecoder(self.enc.features_dim, self.latent_s, dec_net, t_dim=0,
+                                          out_c=self.img_size[0], img_width=self.img_size[1])
         else:
             self.enc = TemporalEncoder(32**2, self.latent_s*2, enc_net, 0)
             self.dec = TemporalDecoder(32**2, self.latent_s, dec_net, 0)
@@ -32,7 +32,6 @@ class VAEModel(nn.Module):
         # Decoding
         mu_x_pred = self.dec(mu_z + torch.exp(log_sigma_z) * torch.randn(mu_z.shape, device=self.device))
         KL_x = ((mu_x_pred.view(bs, -1) - x0) ** 2).view(bs, -1).sum(1)
-
 
 
         loss = KL_x.mean(0) + KL_z.mean(0)

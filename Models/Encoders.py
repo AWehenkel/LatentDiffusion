@@ -37,7 +37,7 @@ class Encoder(nn.Module):
 
 
 class TemporalEncoder(nn.Module):
-    def __init__(self, x_dim, z_dim, layers, t_dim=1, act=nn.ReLU):
+    def __init__(self, x_dim, z_dim, layers, t_dim=1, act=nn.SELU):
         super(TemporalEncoder, self).__init__()
         layers = [x_dim + t_dim] + layers + [z_dim]
         net = []
@@ -53,15 +53,15 @@ class TemporalEncoder(nn.Module):
 
 
 class SimpleImageEncoder(nn.Module):
-    def __init__(self, x_dim, z_dim, layers, t_dim=1, pos_enc=None, act=nn.ReLU):
+    def __init__(self, x_dim, z_dim, layers, t_dim=1, pos_enc=None, act=nn.SELU):
         super(SimpleImageEncoder, self).__init__()
         image_channels = x_dim[0]
-        init_channels = 8
+        init_channels = 25
         kernel_size = 4
         self.conv = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2), act(), #nn.MaxPool2d(2, 2),
                                   nn.Conv2d(init_channels, init_channels*2, kernel_size, padding=1, stride=2), act(),
                                   nn.Conv2d(init_channels*2, init_channels*4, kernel_size, padding=1, stride=2), act(),
-                                  nn.Conv2d(init_channels*4, 64, kernel_size, padding=0, stride=2), act())
+                                  nn.Conv2d(init_channels*4, init_channels*4, kernel_size, padding=0, stride=2), act())
                                   #nn.MaxPool2d(2, 2))
         self.features_dim = self.conv(torch.zeros(x_dim).unsqueeze(0)).shape[1:]
         features_dim = self.features_dim[0] * self.features_dim[1] * self.features_dim[2]
@@ -72,4 +72,43 @@ class SimpleImageEncoder(nn.Module):
         t = self.pos_enc(t) if self.pos_enc is not None else t
         features = self.conv(x).view(x.shape[0], -1)
         return self.fc(features, t)
+
+
+class DCEncoder(nn.Module):
+    def __init__(self, x_dim, z_dim, layers, t_dim=1, pos_enc=None, act=nn.SELU):
+        super(DCEncoder, self).__init__()
+        image_channels = x_dim[0]
+        init_channels = int(z_dim/4)
+        print(z_dim)
+        kernel_size = 4
+        if x_dim[1] == 32:
+            self.conv = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2), act(),
+                                      # nn.MaxPool2d(2, 2),
+                                      nn.Conv2d(init_channels, init_channels * 2, kernel_size, padding=1, stride=2),
+                                      act(),
+                                      nn.Conv2d(init_channels * 2, init_channels * 4, kernel_size, padding=1, stride=2),
+                                      act(),
+                                      nn.Conv2d(init_channels * 4, init_channels * 4, kernel_size, padding=0, stride=2),
+                                      act())
+            # nn.MaxPool2d(2, 2))
+        elif x_dim[1] == 64:
+            self.conv = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2), act(),
+                                      # nn.MaxPool2d(2, 2),
+                                      nn.Conv2d(init_channels, init_channels * 2, kernel_size, padding=1, stride=2),
+                                      act(),
+                                      nn.Conv2d(init_channels * 2, init_channels * 4, kernel_size, padding=1, stride=2),
+                                      act(),
+                                      nn.Conv2d(init_channels * 4, init_channels * 4, kernel_size, padding=0, stride=2),
+                                      act(),
+                                      nn.Conv2d(init_channels * 4, init_channels * 4, kernel_size, padding=1, stride=2),
+                                      act())
+        self.features_dim = self.conv(torch.zeros(x_dim).unsqueeze(0)).shape[1:]
+        #features_dim = self.features_dim[0] * self.features_dim[1] * self.features_dim[2]
+        #self.fc = TemporalEncoder(features_dim, z_dim, layers, t_dim, act)
+        #self.pos_enc = pos_enc
+
+    def forward(self, x, t=None):
+        #t = self.pos_enc(t) if self.pos_enc is not None else t
+        features = self.conv(x).view(x.shape[0], -1)
+        return features
 

@@ -3,39 +3,47 @@ import torch.optim as optim
 from Models import VAEModel
 import wandb
 from utils import getDataLoader, logit_back
+import os
+
 wandb.init(project="vae", entity="awehenkel")
 
 
 if __name__ == "__main__":
     bs = 100
     config = {
-        'data': 'CIFAR10',
-        'latent_s': 64,
+        'data': 'celeba',
+        'latent_s': 100,
         'CNN': True,
-        'enc_w': 500,
-        'enc_l': 4,
-        'dec_w': 500,
-        'dec_l': 4,
+        'enc_w': 300,
+        'enc_l': 1,
+        'dec_w': 300,
+        'dec_l': 1,
     }
     wandb.config.update(config)
     config = wandb.config
     train_loader, test_loader, img_size = getDataLoader(config["data"], bs)
     config["img_size"] = img_size
     # Compute Mean abd std per pixel
-    x_mean = 0
-    x_mean2 = 0
-    for batch_idx, (cur_x, target) in enumerate(train_loader):
-        cur_x = cur_x.view(bs, -1).float()
-        x_mean += cur_x.mean(0)
-        x_mean2 += (cur_x ** 2).mean(0)
-    x_mean /= batch_idx + 1
-    x_std = (x_mean2 / (batch_idx + 1) - x_mean ** 2) ** .5
-    x_std[x_std == 0.] = 1.
+    with torch.no_grad():
+        path = config["data"] + 'VAE_standardizer.pkl'
+        if os.path.exists(path):
+            [x_mean, x_std] = torch.load(path)
+        else:
+            x_mean = 0
+            x_mean2 = 0
+            for batch_idx, (cur_x, target) in enumerate(train_loader):
+                cur_x = cur_x.view(bs, -1).float()
+                x_mean += cur_x.mean(0)
+                x_mean2 += (cur_x ** 2).mean(0)
+            x_mean /= batch_idx + 1
+            x_std = (x_mean2 / (batch_idx + 1) - x_mean ** 2) ** .5
+            x_std[x_std == 0.] = 1.
+            torch.save([x_mean, x_std], path)
 
     dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     model = VAEModel(**config).to(dev)
 
-    optimizer = optim.Adam(model.parameters(), lr=.001)
+    optimizer = optim.Adam(model.parameters(), lr=.0005)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
 
     wandb.watch(model)
@@ -51,7 +59,7 @@ if __name__ == "__main__":
             #data = sample
             x0 = data.view(data.shape[0], -1).to(dev)
 
-            x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(bs, -1)) / x_std.to(dev).unsqueeze(0).expand(bs, -1)
+            x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(x0.shape[0], -1)) / x_std.to(dev).unsqueeze(0).expand(x0.shape[0], -1)
             optimizer.zero_grad()
 
             loss = model.loss(x0)
@@ -73,7 +81,7 @@ if __name__ == "__main__":
             #data = sample
             x0 = data.view(data.shape[0], -1).to(dev)
 
-            x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(bs, -1)) / x_std.to(dev).unsqueeze(0).expand(bs, -1)
+            x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(x0.shape[0], -1)) / x_std.to(dev).unsqueeze(0).expand(x0.shape[0], -1)
             optimizer.zero_grad()
 
             loss = model.loss(x0)
