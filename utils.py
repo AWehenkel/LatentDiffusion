@@ -10,7 +10,7 @@ def add_noise(x):
     """
     noise = x.new().resize_as_(x).uniform_()
     x = x * 255 + noise
-    #x = x / 256
+    x = x / 256
     return x
 
 
@@ -19,12 +19,17 @@ class RandomBlur(object):
         super().__init__()
         self.T = T
         self.level_max = level_max
+        self.to_tensor = transforms.ToTensor()
+        self.norm = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
 
     def __call__(self, x):
-        t = np.random.randint(0, self.T + 1)
-        level = self.level_max / self.T * t
-        gaussImage = x.filter(ImageFilter.GaussianBlur(level))
-        return torch.tensor(np.array(x)).permute(2, 0, 1), torch.tensor(np.array(gaussImage)).permute(2, 0, 1), torch.tensor([t])
+        x0 = x
+        t = np.random.randint(1, self.T + 1)
+        level = self.level_max / self.T * t * (t + 1)/2
+        xt = x.filter(ImageFilter.GaussianBlur(level))
+        level = self.level_max / self.T * t * (t - 1) / 2
+        xt_1 = x.filter(ImageFilter.GaussianBlur(level))
+        return self.norm(add_noise(self.to_tensor(x0))), self.norm(add_noise(self.to_tensor(xt))), self.norm(add_noise(self.to_tensor(xt_1))), torch.tensor([t])
 
     def __repr__(self):
         format_string = self.__class__.__name__
@@ -53,15 +58,17 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                          transform=transforms.Compose([
                                              transforms.Resize(32),
                                              transforms.RandomHorizontalFlip(),
-                                             transforms.ToTensor(),
-                                             add_noise
+                                            transforms.ToTensor(),
+                                            add_noise,
+                                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                          ]))
         test_dataset = datasets.CIFAR10(root='./cifar10_data/', train=False, download=True,
                                         transform=transforms.Compose([
                                             transforms.Resize(32),
                                             transforms.RandomHorizontalFlip(),
                                             transforms.ToTensor(),
-                                            add_noise
+                                            add_noise,
+                                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                         ]))
 
         # Data Loader (Input Pipeline)
@@ -97,7 +104,9 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                        transform=transforms.Compose([
                                        transforms.Resize(image_size),
                                        transforms.CenterCrop(image_size),
-                                       transforms.ToTensor(),
+                                            transforms.ToTensor(),
+                                            add_noise,
+                                       #transforms.ToTensor(),
                                        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                    ]))
         # Create the dataloader
@@ -111,12 +120,14 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                              transform=transforms.Compose([
                                                  transforms.Resize(image_size),
                                                  transforms.CenterCrop(image_size),
-                                                 transforms.ToTensor(),
-                                                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                                            transforms.ToTensor(),
+                                            add_noise
+                                                 #transforms.ToTensor(),
+                                                 ,transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                              ]))
         # Create the dataloader
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
-                                                   shuffle=True, num_workers=n_workers, drop_last=True)
+                                                   shuffle=False, num_workers=n_workers, drop_last=True)
         img_size = [3, 64, 64]
 
     elif dataset == "Heated_celeba":
@@ -124,7 +135,7 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
         if not torch.cuda.is_available():
             dataroot = '.'
         image_size = 64
-        train_dataset = datasets.CelebA(dataroot, split='train',download=False,
+        train_dataset = datasets.CelebA(dataroot, split='train', download=False,
                                                 transform=transforms.Compose([
                                                  transforms.Resize(image_size),
                                                  transforms.CenterCrop(image_size),
@@ -145,9 +156,72 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                             ]))
         # Create the dataloader
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
-                                                  shuffle=True, num_workers=n_workers, drop_last=True)
+                                                  shuffle=False, num_workers=n_workers, drop_last=True)
 
         img_size = [3, 64, 64]
+
+    elif dataset == "celeba_HQ":
+        dataroot = '/scratch/users/awehenkel/celeba/'
+        if not torch.cuda.is_available():
+            dataroot = '.'
+        image_size = 256
+        train_dataset = datasets.CelebA(dataroot, split='train', download=False,
+                                       transform=transforms.Compose([
+                                       transforms.Resize(image_size),
+                                       transforms.CenterCrop(image_size),
+                                            transforms.ToTensor(),
+                                            add_noise,
+                                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                                   ]))
+        # Create the dataloader
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=True,
+                                                 shuffle=True, num_workers=n_workers, drop_last=True)
+        dataroot = '/scratch/users/awehenkel/celeba/'
+        if not torch.cuda.is_available():
+            dataroot = '.'
+        image_size = 256
+        test_dataset = datasets.CelebA(dataroot, split='test',download=False,
+                                             transform=transforms.Compose([
+                                                 transforms.Resize(image_size),
+                                                 transforms.CenterCrop(image_size),
+                                            transforms.ToTensor(),
+                                            add_noise,
+                                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                                             ]))
+        # Create the dataloader
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
+                                                   shuffle=False, num_workers=n_workers, drop_last=True)
+        img_size = [3, 256, 256]
+
+    elif dataset == "Heated_celeba_HQ":
+        dataroot = '/scratch/users/awehenkel/celeba/'
+        if not torch.cuda.is_available():
+            dataroot = '.'
+        image_size = 256
+        train_dataset = datasets.CelebA(dataroot, split='train',download=False,
+                                                transform=transforms.Compose([
+                                                 transforms.Resize(image_size),
+                                                 transforms.CenterCrop(image_size),
+                                                 RandomBlur(T=T, level_max=level_max)
+                                             ]))
+        # Create the dataloader
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=True,
+                                                   shuffle=True, num_workers=n_workers, drop_last=True)
+        dataroot = '/scratch/users/awehenkel/celeba/'
+        if not torch.cuda.is_available():
+            dataroot = '.'
+        image_size = 256
+        test_dataset = datasets.CelebA(dataroot, split='test', download=False,
+                                            transform=transforms.Compose([
+                                                transforms.Resize(image_size),
+                                                transforms.CenterCrop(image_size),
+                                                RandomBlur(T=T, level_max=level_max)
+                                            ]))
+        # Create the dataloader
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
+                                                  shuffle=False, num_workers=n_workers, drop_last=True)
+
+        img_size = [3, 256, 256]
 
     elif dataset == "Heated_CIFAR10_DEBUG":
         # CIFAR10 Dataset

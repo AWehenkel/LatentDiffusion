@@ -15,23 +15,46 @@ config_celeba = {
         'enc_l': 1,
         'dec_w': 300,
         'dec_l': 1,
-        'trans_w': 500,
+        'trans_w': 1000,
         'trans_l': 5,
         "beta_min": 0.01,
-        "beta_max": .5,
+        "beta_max": .75,
         'simplified_trans': False,
         't_emb_s': 50,
-        'T': 200,
-        'level_max': 15.,
+        'T': 50,
+        'level_max': 1.5,
         'debug': False,
-        'ts_min': [0, 40, 80, 120],
-        'ts_max': [80, 120, 160, 200],
-        'var_sizes': [49, 25, 25, 25]
+        'ts_min': [0, 5, 10, 15, 20, 30, 35, 40],
+        'ts_max': [10, 15, 20, 30, 35, 40, 45, 50],
+        'var_sizes': [50, 50, 50, 50, 50, 50, 50, 50],
+        'decoder_type': 'Progressive2',
+        'batch_size': 256
+    }
+config_celeba_hq = {
+        'data': 'celeba_HQ',
+        'CNN': True,
+        'enc_w': 300,
+        'enc_l': 1,
+        'dec_w': 300,
+        'dec_l': 1,
+        'trans_w': 1000,
+        'trans_l': 5,
+        "beta_min": 0.01,
+        "beta_max": .35,
+        'simplified_trans': False,
+        't_emb_s': 50,
+        'T': 100,
+        'level_max': 2.5,
+        'debug': False,
+        'ts_min': [60, 45, 30, 15, 0],
+        'ts_max': [100, 85, 75, 55, 40],
+        'var_sizes': [150, 100, 50, 50, 50],
+        'decoder_type': 'Progressive2',
+        'batch_size': 64
     }
 
 config_cifar = {
         'data': 'CIFAR10',
-        'latent_s': 100,
         'CNN': True,
         'enc_w': 300,
         'enc_l': 1,
@@ -39,25 +62,30 @@ config_cifar = {
         'dec_l': 1,
         'trans_w': 500,
         'trans_l': 5,
-        "beta_min": 0.0001,
-        "beta_max": .02,
-        'simplified_trans': True,
+        "beta_min": 0.01,
+        "beta_max": .3,
+        'simplified_trans': False,
         't_emb_s': 50,
-        'T': 1000,
-        'level_max': 4.,
+        'T': 50,
+        'level_max': 1.25,
         'debug': False,
-        'ts_min': [0, 200, 400, 600],
-        'ts_max': [400, 600, 800, 1000],
-        'var_sizes': [25, 25, 25, 25]
+        'ts_min': [0, 5, 10, 15, 20, 30, 35, 40],
+        'ts_max': [10, 15, 20, 30, 35, 40, 45, 50],
+        'var_sizes': [50, 50, 50, 50, 50, 50, 50, 50],
+        'decoder_type': 'Progressive2',
+        'batch_size': 256
     }
 
 if __name__ == "__main__":
     freeze_support()
     wandb.init(project="heat_diffusion", entity="awehenkel")
 
-    bs = 100
+    config = config_cifar
 
-    config = config_celeba
+
+    bs = config['batch_size']
+    n_epoch = 500
+
     debug = config['debug']
 
     wandb.config.update(config)
@@ -67,6 +95,7 @@ if __name__ == "__main__":
 
     config["img_size"] = img_size
     # Compute Mean abd std per pixel
+    '''
     path = config["data"] + 'HD_standardizer.pkl'
     if os.path.exists(path):
         [x0_mean, x0_std, xt_mean, xt_std] = torch.load(path)
@@ -92,19 +121,20 @@ if __name__ == "__main__":
         xt_std[xt_std == 0.] = 1.
 
         torch.save([x0_mean, x0_std, xt_mean, xt_std], path)
-
+'''
     dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     model = CNNHeatedLatentDiffusion(**config).to(dev)
 
-    optimizer = optim.Adam(model.parameters(), lr=.0005)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5,
-                                                           patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
+    optimizer = optim.AdamW(model.parameters(), lr=.0001)
+    #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5,
+    #                                                       patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
 
     wandb.watch(model)
 
     def get_X_back(x0):
         nb_x = x0.shape[0]
-        x = x0 * x0_std.to(dev).unsqueeze(0).expand(nb_x, -1) + x0_mean.to(dev).unsqueeze(0).expand(nb_x, -1)
+        x = (x0 * .5) + .5
+        #x = x0 * x0_std.to(dev).unsqueeze(0).expand(nb_x, -1) + x0_mean.to(dev).unsqueeze(0).expand(nb_x, -1)
         return x
 
 
@@ -113,29 +143,30 @@ if __name__ == "__main__":
         x0_debug = x0[[1]].expand(bs, -1, -1, -1)
         xt = xt[[1]].expand(bs, -1, -1, -1)
         t = t[[1]].expand(bs, -1, -1, -1)
-    x0_mean = x0_mean.to(dev)
-    x0_std = x0_std.to(dev)
-    xt_mean = xt_mean.to(dev)
-    xt_std = xt_std.to(dev)
+    #x0_mean = x0_mean.to(dev)
+    #x0_std = x0_std.to(dev)
+    #xt_mean = xt_mean.to(dev)
+    #xt_std = xt_std.to(dev)
     def train(epoch):
         train_loss = 0
-        for batch_idx, ([x0, xt, t], _) in enumerate(train_loader):
+        for batch_idx, ([x0, xt, xt_1, t], _) in enumerate(train_loader):
             if debug:
                 x0 = x.to(dev).view(x.shape[0], -1)
                 t = torch.zeros(x.shape[0], 1).to(dev)
             else:
                 x0 = x0.view(x0.shape[0], -1).to(dev)
                 xt = xt.view(x0.shape[0], -1).to(dev)
+                xt_1 = xt_1.view(x0.shape[0], -1).to(dev)
                 t = t.to(dev)
 
-            x0 = (x0 - x0_mean.unsqueeze(0).expand(x0.shape[0], -1)) / x0_std.unsqueeze(0).expand(x0.shape[0], -1)
-            xt = (xt - xt_mean.unsqueeze(0).expand(xt.shape[0], -1)) / xt_std.unsqueeze(0).expand(xt.shape[0], -1)
+            #x0 = (x0 - x0_mean.unsqueeze(0).expand(x0.shape[0], -1)) / x0_std.unsqueeze(0).expand(x0.shape[0], -1)
+            #xt = (xt - xt_mean.unsqueeze(0).expand(xt.shape[0], -1)) / xt_std.unsqueeze(0).expand(xt.shape[0], -1)
 
 
 
             optimizer.zero_grad()
 
-            loss = model.loss(x0, xt, t)
+            loss = model.loss(x0, xt, xt_1, t)
 
             loss.backward()
 
@@ -162,31 +193,37 @@ if __name__ == "__main__":
                 xt = x0
                 t = torch.zeros(x0.shape[0], 1).to(dev).long()
 
-            x0 = (x0 - x0_mean.unsqueeze(0).expand(x0.shape[0], -1)) / x0_std.unsqueeze(0).expand(
-                x0.shape[0], -1)
-            xt = (xt - xt_mean.unsqueeze(0).expand(xt.shape[0], -1)) / xt_std.unsqueeze(0).expand(
-                xt.shape[0], -1)
+            #x0 = (x0 - x0_mean.unsqueeze(0).expand(x0.shape[0], -1)) / x0_std.unsqueeze(0).expand(
+            #    x0.shape[0], -1)
+            #xt = (xt - xt_mean.unsqueeze(0).expand(xt.shape[0], -1)) / xt_std.unsqueeze(0).expand(
+            #    xt.shape[0], -1)
             optimizer.zero_grad()
 
-            loss = model.loss(x0, xt,  t)
+            loss = model.loss(x0, xt, xt,  t)
 
             test_loss += loss.detach()
         reconstructed_test = model(x0[:64], t[:64])
         return test_loss.item() / len(test_loader.dataset), reconstructed_test, x0[:64]
 
-    for i in range(150):
+    for i in range(n_epoch):
+        model.train()
         train_loss = train(i)
-        test_loss, x_rec, x = test(i)
-        x = get_X_back(x.view(64, -1)).view(64, *img_size)
-        x_rec = get_X_back(x_rec.view(64, -1)).view(64, *img_size)
-        samples_1 = get_X_back(model.sample(64)).view(64, *img_size)
-        samples_8 = get_X_back(model.sample(64, temperature=.8)).view(64, *img_size)
+        model.eval()
+        with torch.no_grad():
+            test_loss, x_rec, x = test(i)
+            x = get_X_back(x.view(64, -1)).view(64, *img_size)
+            x_rec = get_X_back(x_rec.view(64, -1)).view(64, *img_size)
+            samples_1 = get_X_back(model.sample(64)).view(64, *img_size)
+            samples_8 = get_X_back(model.sample(64, temperature=.8)).view(64, *img_size)
+            samples_3 = get_X_back(model.sample(64, temperature=.3)).view(64, *img_size)
         print('====> Epoch: {} - Average Train loss: {:.4f} - Average Test Loss: {:.4f}'.format(i, train_loss, test_loss))
+        torch.save(model.state_dict(), 'saved_models/' + wandb.run.name + '.pt')
 
         wandb.log({"Train Loss": train_loss,
                    "Test Loss": test_loss,
                    "Samples T°100": [wandb.Image(samples_1)],
                    "Samples T°80": [wandb.Image(samples_8)],
+                   "Samples T°30": [wandb.Image(samples_3)],
                    "Reconstructed": [wandb.Image(x_rec)],
                    "Data": [wandb.Image(x)],
                    "epoch": i})

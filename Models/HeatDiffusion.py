@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 from Models import TemporalDecoder, DCDecoder, DCEncoder, TemporalEncoder, AsynchronousDiffuser, TransitionNet, \
-    SimpleImageDecoder, SimpleImageEncoder, PositionalEncoder, StupidPositionalEncoder
+    SimpleImageDecoder, SimpleImageEncoder, PositionalEncoder, StupidPositionalEncoder, ProgressiveDecoder, ProgressiveDecoder2
 
-
+decoder_types = {'Progressive': ProgressiveDecoder, 'DC': DCDecoder, 'Progressive2': ProgressiveDecoder2}
 # VAE that takes temporal information and play with it.
 class AugmentedVAEModel(nn.Module):
     def __init__(self, **kwargs):
@@ -78,7 +78,7 @@ class HeatedLatentDiffusionModel(nn.Module):
         self.diffuser = diffuser
         self.latent_transition = latent_transition
 
-    def loss(self, x0, xt, t):
+    def loss(self, x0, xt, xt_1, t):
         bs = x0.shape[0]
 
         z0 = self.encoder(x0.view(-1, *self.img_size), t * 0)
@@ -89,13 +89,22 @@ class HeatedLatentDiffusionModel(nn.Module):
         zt = self.diffuser.diffuse(z0, t)
 
         zt_rec = self.encoder(xt.view(-1, *self.img_size), t)
-        KL_zt = ((zt - zt_rec)**2).mean(1)
 
         xt_rec = self.decoder(zt, t).view(bs, -1)
         KL_xt = ((xt - xt_rec)**2).view(bs, -1).mean(1)
 
         zt_1 = self.diffuser.reverse(z0.detach(), zt, t - 1)
         zt_1_rec = self.latent_transition(zt, t - 1)
+
+        sigma_cond = ((1 - self.diffuser.alphas[t.view(-1) - 1, :]) / (
+                    1 - self.diffuser.alphas[t.view(-1), :]) * self.diffuser.betas[t.view(-1),
+                                                               :]).sqrt()
+        sigma_cond[sigma_cond / sigma_cond != sigma_cond / sigma_cond] = 1.
+
+        xt_1_rec = self.decoder(zt_1_rec + sigma_cond * torch.randn_like(zt_1), t - 1).view(bs, -1)
+
+        KL_xt_1 = ((xt_1 - xt_1_rec)**2).view(bs, -1).mean(1)
+
         if self.simple_transition:
             alpha_bar_t = self.diffuser.alphas[t.view(-1), :]
             alpha_t = self.diffuser.alphas_t[t.view(-1), :]
@@ -104,13 +113,18 @@ class HeatedLatentDiffusionModel(nn.Module):
             is_dirac = torch.logical_or((1 - alpha_bar_t) == 0., beta_t == 0.)
             beta_t[is_dirac] = 1.
 
+
             epsilon = is_dirac.float() * torch.zeros_like(zt) + (1 - is_dirac.float()) * ((zt - alpha_t.sqrt() * zt_1) * (1-alpha_bar_t.sqrt())/beta_t)
-            KL_diffusion = ((epsilon - zt_1_rec) ** 2).mean(1)
+            KL_diffusion = (((epsilon - zt_1_rec)/sigma_cond)** 2).mean(1)
         else:
-            KL_diffusion = ((zt_1 - zt_1_rec)**2).mean(1)
+            KL_diffusion = (((zt_1 - zt_1_rec) / sigma_cond) ** 2).mean(1)
 
+        # TODO check effect of sigma_cond
+        KL_zt = (((zt - zt_rec)/sigma_cond)**2).mean(1)
 
-        return KL_x0.mean() + KL_zt.mean() + KL_xt.mean() + KL_diffusion.mean()#(KL_x0 + KL_zt + KL_xt + KL_diffusion).mean()
+        #loss = (KL_x0 + KL_zt + KL_xt + KL_diffusion).mean()
+        loss = (KL_zt + KL_xt + KL_diffusion + KL_xt_1).mean()
+        return loss
 
     def to(self, device):
         super().to(device)
@@ -153,7 +167,7 @@ class CNNHeatedLatentDiffusion(HeatedLatentDiffusionModel):
         trans_net = [kwargs['trans_w']] * kwargs['trans_l']
 
         self.encoder = DCEncoder(self.img_size, self.latent_s, enc_net, t_dim=self.t_emb_s, pos_enc=pos_enc)
-        self.decoder = DCDecoder(self.encoder.features_dim, self.latent_s, dec_net, t_dim=self.t_emb_s,
+        self.decoder = decoder_types[kwargs['decoder_type']](self.encoder.features_dim, kwargs['var_sizes'], dec_net, t_dim=self.t_emb_s,
                                           pos_enc=pos_enc, out_c=self.img_size[0], img_width=self.img_size[1])
 
         self.diffuser = AsynchronousDiffuser(betas_min=[self.beta_min]*len(kwargs['ts_min']),

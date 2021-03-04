@@ -11,7 +11,7 @@ wandb.init(project="vae", entity="awehenkel")
 if __name__ == "__main__":
     bs = 100
     config = {
-        'data': 'celeba',
+        'data': 'CIFAR10',
         'latent_s': 100,
         'CNN': True,
         'enc_w': 300,
@@ -23,6 +23,7 @@ if __name__ == "__main__":
     config = wandb.config
     train_loader, test_loader, img_size = getDataLoader(config["data"], bs)
     config["img_size"] = img_size
+    '''
     # Compute Mean abd std per pixel
     with torch.no_grad():
         path = config["data"] + 'VAE_standardizer.pkl'
@@ -39,17 +40,19 @@ if __name__ == "__main__":
             x_std = (x_mean2 / (batch_idx + 1) - x_mean ** 2) ** .5
             x_std[x_std == 0.] = 1.
             torch.save([x_mean, x_std], path)
+    '''
 
     dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     model = VAEModel(**config).to(dev)
 
-    optimizer = optim.Adam(model.parameters(), lr=.0005)
+    optimizer = optim.Adam(model.parameters(), lr=.0001)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
 
     wandb.watch(model)
-    def get_X_back(x):
-        nb_x = x.shape[0]
-        x = x * x_std.to(dev).unsqueeze(0).expand(nb_x, -1) + x_mean.to(dev).unsqueeze(0).expand(nb_x, -1)
+    def get_X_back(x0):
+        nb_x = x0.shape[0]
+        x = (x0 * .5) + .5
+        #x = x0 * x0_std.to(dev).unsqueeze(0).expand(nb_x, -1) + x0_mean.to(dev).unsqueeze(0).expand(nb_x, -1)
         return x
 
 
@@ -59,7 +62,7 @@ if __name__ == "__main__":
             #data = sample
             x0 = data.view(data.shape[0], -1).to(dev)
 
-            x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(x0.shape[0], -1)) / x_std.to(dev).unsqueeze(0).expand(x0.shape[0], -1)
+            #x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(x0.shape[0], -1)) / x_std.to(dev).unsqueeze(0).expand(x0.shape[0], -1)
             optimizer.zero_grad()
 
             loss = model.loss(x0)
@@ -81,7 +84,7 @@ if __name__ == "__main__":
             #data = sample
             x0 = data.view(data.shape[0], -1).to(dev)
 
-            x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(x0.shape[0], -1)) / x_std.to(dev).unsqueeze(0).expand(x0.shape[0], -1)
+            #x0 = (x0 - x_mean.to(dev).unsqueeze(0).expand(x0.shape[0], -1)) / x_std.to(dev).unsqueeze(0).expand(x0.shape[0], -1)
             optimizer.zero_grad()
 
             loss = model.loss(x0)

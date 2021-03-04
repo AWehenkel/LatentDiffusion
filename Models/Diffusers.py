@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+#from NFmodels import AutoregressiveConditioner, AffineNormalizer, buildFCNormalizingFlow
 
 class DataDiffuser(nn.Module):
     def __init__(self, beta_min=1e-4, beta_max=.02, t_min=0, t_max=1000):
@@ -43,6 +43,8 @@ class AsynchronousDiffuser(nn.Module):
         betas = []
         alphas_t = []
         alphas = []
+        dirac_z0 = []
+        dirac_zt_1 = []
         for b_min, b_max, t_min, t_max, var_size in zip(betas_min, betas_max, ts_min, ts_max, var_sizes):
             beta = torch.zeros(var_size, T + 1)
             beta[:, t_min:t_max+1] = torch.linspace(b_min, b_max, 1 + t_max - t_min)
@@ -53,9 +55,22 @@ class AsynchronousDiffuser(nn.Module):
             alphas_t.append(alpha_t)
             alphas.append(alpha)
 
+            dz0 = torch.zeros_like(alpha)
+            dz0[:, :t_min] = 1.
+            dzt1 = torch.zeros_like(alpha)
+            dzt1[:, t_max+1:] = 1.
+            dirac_z0.append(dz0)
+            dirac_zt_1.append(dzt1)
+
         self.register_buffer('betas', torch.cat(betas, 0).permute(1, 0).float())
         self.register_buffer('alphas_t', torch.cat(alphas, 0).permute(1, 0).float())
         self.register_buffer('alphas', torch.cat(alphas, 0).permute(1, 0).float())
+        self.register_buffer('dirac_z0', torch.cat(dirac_z0, 0).permute(1, 0).float())
+        self.register_buffer('dirac_zt_1', torch.cat(dirac_zt_1, 0).permute(1, 0).float())
+        no_dirac = torch.zeros_like(self.betas)
+        no_dirac[self.betas != 0.] = 1.
+        self.register_buffer('no_dirac', no_dirac)
+
 
     def diffuse(self, z_t0, t):
         t = t.view(-1)
@@ -67,7 +82,9 @@ class AsynchronousDiffuser(nn.Module):
     def reverse(self, z_t0, z_t, t_1):
         t_1 = t_1.view(-1)
 
-        is_dirac = (self.betas[t_1, :] == 0.).float()
+        dirac_z0 = self.dirac_z0[t_1, :]
+        dirac_zt_1 = self.dirac_zt_1[t_1, :]
+        no_dirac = self.no_dirac[t_1, :]
         alphas = self.alphas
         betas = self.betas
         alphas_t = self.alphas_t
@@ -84,16 +101,20 @@ class AsynchronousDiffuser(nn.Module):
         mu_cond[mu_cond/mu_cond != mu_cond/mu_cond] = 0.
         sigma_cond[sigma_cond / sigma_cond != sigma_cond / sigma_cond] = 0.
 
-        mu = z_t * is_dirac + (1 - is_dirac) * mu_cond
+        mu = z_t * dirac_zt_1 + dirac_z0 * z_t0 + no_dirac * mu_cond
 
         return mu + sigma_cond * torch.randn_like(z_t)
 
     def past_sample(self, mu_z_pred, t_1):
-        return mu_z_pred + torch.randn_like(mu_z_pred) * self.betas[t_1.view(-1), :]
+        sigma_cond = ((1 - self.alphas[t_1.view(-1), :]) / (1 - self.alphas[t_1.view(-1) + 1, :]) * self.betas[t_1.view(-1) + 1, :]).sqrt()
+        sigma_cond[sigma_cond / sigma_cond != sigma_cond / sigma_cond] = 0.
+        no_dirac = self.no_dirac[t_1.view(-1), :]
+        sigma_cond = 0 * (1 - no_dirac) + no_dirac * sigma_cond
+        return mu_z_pred + torch.randn_like(mu_z_pred) * sigma_cond#self.betas[t_1.view(-1)+1, :].sqrt()
 
 
 class TransitionNet(nn.Module):
-    def __init__(self, z_dim, layers, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=True):
+    def __init__(self, z_dim, layers, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=False):
         super(TransitionNet, self).__init__()
         layers = [z_dim + t_dim] + layers + [z_dim]
         net = []
@@ -111,7 +132,7 @@ class TransitionNet(nn.Module):
 
         t = self.pos_enc(t) if self.pos_enc is not None else t
 
-        mu_z_pred = self.net(torch.cat((z, t), 1))
+        mu_z_pred = self.net(torch.cat((z, t), 1)) + z
         return mu_z_pred#self.net(torch.cat((z, t), 1)) #+ z
 
 
@@ -132,9 +153,9 @@ class TransitionNet(nn.Module):
 
             mu_z_pred = self.forward(z_t, t_t)
             if self.simplified_trans:
-                alpha_bar_t = self.diffuser.alphas[t_t.view(-1), :]
-                alpha_t = self.diffuser.alphas_t[t_t.view(-1), :]
-                beta_t = self.diffuser.betas[t_t.view(-1), :]
+                alpha_bar_t = self.diffuser.alphas[t_t.view(-1) + 1, :]
+                alpha_t = self.diffuser.alphas_t[t_t.view(-1) + 1, :]
+                beta_t = self.diffuser.betas[t_t.view(-1) + 1, :]
 
                 is_dirac = torch.logical_or((1 - alpha_bar_t) == 0., alpha_t == 1.)
                 beta_t[is_dirac] = 1.
@@ -142,12 +163,74 @@ class TransitionNet(nn.Module):
                 alpha_t[is_dirac] = 1.
                 #print(alpha_t.sqrt().min())
                 #print(((1 - alpha_t)/(1 - alpha_bar_t).sqrt()).max())
-                mu_z_pred = (z_t - (1 - alpha_t)/(1 - alpha_bar_t).sqrt() * mu_z_pred)/alpha_t.sqrt()
+                mu_z_pred = (z_t - beta_t/(1 - alpha_bar_t).sqrt() * mu_z_pred)/alpha_t.sqrt()
                 z_t = z_t * is_dirac.float() + (1 - is_dirac.float()) * self.diffuser.past_sample(mu_z_pred, t_t)
                 #print(z_t.norm(), z_t.std(), z_t.mean())
             else:
                 z_t = self.diffuser.past_sample(mu_z_pred, t_t)
-        print(z_t.norm(), z_t.std(), z_t.mean())
+        #print(z_t.norm(), z_t.std(), z_t.mean())
         return z_t
 
 
+
+'''
+class NFTransitionNet(nn.Module):
+    def __init__(self, z_dim, layers, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=False):
+        super(NFTransitionNet, self).__init__()
+        cond_type = AutoregressiveConditioner
+        conf_args = {'in_size': z_dim, "hidden": layers, "out_size": 2, 'cond_in': t_dim}
+        norm_type = AffineNormalizer
+        norm_args = {}
+        nb_flow = 3
+        self.net = buildFCNormalizingFlow(nb_flow, cond_type, conf_args, norm_type, norm_args)
+        self.diffuser = diffuser
+        self.z_dim = z_dim
+        self.device = 'cpu'
+        self.pos_enc = pos_enc
+        self.simplified_trans = simplified_trans
+
+    def forward(self, z, t):
+
+        t = self.pos_enc(t) if self.pos_enc is not None else t
+
+        mu_z_pred, jac = self.net(z, t) #+ z
+        return mu_z_pred#self.net(torch.cat((z, t), 1)) #+ z
+
+
+    def to(self, device):
+        super().to(device)
+        self.device = device
+        return self
+
+    def sample(self, nb_samples, t0=0, temperature=1.):
+        if self.diffuser is None:
+            raise NotImplementedError
+
+        zT = torch.randn(nb_samples, self.z_dim).to(self.device) * temperature
+        T = self.diffuser.T
+        z_t = zT
+        for t in range(T - 1, t0-1, -1):
+            t_t = torch.ones(nb_samples, 1).to(self.device).long() * t
+
+            mu_z_pred = self.forward(z_t, t_t)
+            if self.simplified_trans:
+                alpha_bar_t = self.diffuser.alphas[t_t.view(-1) + 1, :]
+                alpha_t = self.diffuser.alphas_t[t_t.view(-1) + 1, :]
+                beta_t = self.diffuser.betas[t_t.view(-1) + 1, :]
+
+                is_dirac = torch.logical_or((1 - alpha_bar_t) == 0., alpha_t == 1.)
+                beta_t[is_dirac] = 1.
+                alpha_bar_t[is_dirac] = 0.
+                alpha_t[is_dirac] = 1.
+                #print(alpha_t.sqrt().min())
+                #print(((1 - alpha_t)/(1 - alpha_bar_t).sqrt()).max())
+                mu_z_pred = (z_t - beta_t/(1 - alpha_bar_t).sqrt() * mu_z_pred)/alpha_t.sqrt()
+                z_t = z_t * is_dirac.float() + (1 - is_dirac.float()) * self.diffuser.past_sample(mu_z_pred, t_t + 1)
+                #print(z_t.norm(), z_t.std(), z_t.mean())
+            else:
+                z_t = self.diffuser.past_sample(mu_z_pred, t_t + 1)
+        #print(z_t.norm(), z_t.std(), z_t.mean())
+        return z_t
+
+
+'''
