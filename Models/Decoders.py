@@ -298,30 +298,39 @@ class ProgressiveDecoder2(nn.Module):
         nz = sum(z_dim)#features_dim
 
         # Size of feature maps in generator
-        ngf = 64
+        ngf = 128
         self.img_width = img_width
         self.nz = nz
 
         if img_width == 32:
+            ngf = 128
+
             self.weight_z = nn.Sequential(nn.Linear(t_dim, sum(z_dim)), nn.Sigmoid())
             self.weight_z1 = nn.Sequential(nn.Linear(t_dim, ngf * 4), nn.Sigmoid())
             self.weight_z2 = nn.Sequential(nn.Linear(t_dim, ngf * 2), nn.Sigmoid())
             self.weight_z3 = nn.Sequential(nn.Linear(t_dim, ngf), nn.Sigmoid())
             self.t_conv1 = nn.Sequential(nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
-                                         nn.BatchNorm2d(ngf * 8),
+                                         #nn.BatchNorm2d(ngf * 8),
                                          act(), # state size. (ngf*8) x 4 x 4
-                                         nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False)
+                                         nn.Conv2d(ngf * 8, ngf * 4, 1),
+                                         act(),
+                                         nn.ConvTranspose2d(ngf * 4, ngf * 4, 4, 2, 1, bias=False),
+                                        act())
+
+            self.t_conv2 = nn.Sequential(#nn.BatchNorm2d(ngf * 4),
+                                        nn.Conv2d(ngf * 4, ngf * 2, 1),
+                                        act(),
+                                         nn.ConvTranspose2d(ngf * 2, ngf * 2, 4, 2, 1, bias=False)
+            )
+
+            self.t_conv3 = nn.Sequential(#nn.BatchNorm2d(ngf * 2),
+                                         act(),
+                                         nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
+                                         #nn.BatchNorm2d(ngf),
+                                         act(),
                                          )
 
-            self.t_conv2 = nn.Sequential(nn.BatchNorm2d(ngf * 4),
-                                         act(),
-                                         nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False))
-
-            self.t_conv3 = nn.Sequential(nn.BatchNorm2d(ngf * 2),
-                                         act(),
-                                         nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False))
-
-            self.conv = nn.Sequential(nn.Conv2d(ngf, nc, 3, padding=1), nn.Tanh())
+            self.conv = nn.Sequential(nn.Conv2d(ngf, nc, 1, padding=0), nn.Tanh())
 
 
         elif img_width == 64:
@@ -332,25 +341,31 @@ class ProgressiveDecoder2(nn.Module):
             self.weight_z4 = nn.Sequential(nn.Linear(t_dim, ngf), nn.Sigmoid())
 
             self.t_conv1 = nn.Sequential(nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
-                                         nn.BatchNorm2d(ngf * 8),
+                                         #nn.BatchNorm2d(ngf * 8),
                                          act(),  # state size. (ngf*8) x 4 x 4
-                                         nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False)
+                                         nn.Conv2d(ngf * 8, ngf * 4, 1),
+                                         act(),
+                                         nn.ConvTranspose2d(ngf * 4, ngf * 4, 4, 2, 1, bias=False)
                                          )
 
-            self.t_conv2 = nn.Sequential(nn.BatchNorm2d(ngf * 4),
+            self.t_conv2 = nn.Sequential(#nn.BatchNorm2d(ngf * 4),
                                          act(),
-                                         nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False))
-
-            self.t_conv3 = nn.Sequential(nn.BatchNorm2d(ngf * 2),
+                                         nn.Conv2d(ngf * 4, ngf * 2, 1),
                                          act(),
-                                         nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False))
+                                         nn.ConvTranspose2d(ngf * 2, ngf * 2, 4, 2, 1, bias=False))
 
-            self.t_conv4 = nn.Sequential(nn.BatchNorm2d(ngf),
+            self.t_conv3 = nn.Sequential(#nn.BatchNorm2d(ngf * 2),
+                                         act(),
+                                         nn.Conv2d(ngf * 2, ngf, 1),
+                                         act(),
+                                         nn.ConvTranspose2d(ngf, ngf, 4, 2, 1, bias=False))
+
+            self.t_conv4 = nn.Sequential(#nn.BatchNorm2d(ngf),
                                          act(),
                                          nn.ConvTranspose2d(ngf, ngf, 4, 2, 1, bias=False))
 
 
-            self.conv = nn.Sequential(nn.Conv2d(ngf, nc, 3, padding=1), nn.Tanh())
+            self.conv = nn.Sequential(nn.Conv2d(ngf, nc, 1, padding=0), nn.Tanh())
 
         elif img_width == 256:
             self.weight_z = nn.Sequential(nn.Linear(t_dim, sum(z_dim)), nn.Sigmoid())
@@ -393,7 +408,7 @@ class ProgressiveDecoder2(nn.Module):
 
             self.weight_z5 = nn.Sequential(nn.Linear(t_dim, ngf), nn.Sigmoid())
 
-            self.conv = nn.Sequential(nn.Conv2d(ngf, nc, 3, padding=1), nn.Tanh())
+            self.conv = nn.Sequential(nn.Conv2d(ngf, nc, 1, padding=0), nn.Tanh())
 
     def forward(self, z, t=None):
         t = self.pos_enc(t) if self.pos_enc is not None else t

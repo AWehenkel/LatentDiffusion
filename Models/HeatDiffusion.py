@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 from Models import TemporalDecoder, DCDecoder, DCEncoder, TemporalEncoder, AsynchronousDiffuser, TransitionNet, \
-    SimpleImageDecoder, SimpleImageEncoder, PositionalEncoder, StupidPositionalEncoder, ProgressiveDecoder, ProgressiveDecoder2
+    SimpleImageDecoder, SimpleImageEncoder, PositionalEncoder, StupidPositionalEncoder, ProgressiveDecoder, \
+    ProgressiveDecoder2, ImprovedTransitionNet
 
 decoder_types = {'Progressive': ProgressiveDecoder, 'DC': DCDecoder, 'Progressive2': ProgressiveDecoder2}
 # VAE that takes temporal information and play with it.
@@ -82,11 +83,13 @@ class HeatedLatentDiffusionModel(nn.Module):
         bs = x0.shape[0]
 
         z0 = self.encoder(x0.view(-1, *self.img_size), t * 0)
-        x0_rec = self.decoder(z0, t).view(bs, -1)
-        KL_x0 = ((x0 - x0_rec)**2).mean(1)
+        #x0_rec = self.decoder(z0, t).view(bs, -1)
+        #KL_x0 = ((x0 - x0_rec)**2).mean(1)
 
         # TODO, should I detach z0?
         zt = self.diffuser.diffuse(z0, t)
+
+        #zt_1_rec_enc = self.encoder(xt_1.view(-1, *self.img_size), t-1)
 
         zt_rec = self.encoder(xt.view(-1, *self.img_size), t)
 
@@ -99,9 +102,17 @@ class HeatedLatentDiffusionModel(nn.Module):
         sigma_cond = ((1 - self.diffuser.alphas[t.view(-1) - 1, :]) / (
                     1 - self.diffuser.alphas[t.view(-1), :]) * self.diffuser.betas[t.view(-1),
                                                                :]).sqrt()
-        sigma_cond[sigma_cond / sigma_cond != sigma_cond / sigma_cond] = 1.
+
+        dirac_z0 = self.diffuser.dirac_z0[t.view(-1), :]
+        dirac_zt_1 = self.diffuser.dirac_zt_1[t.view(-1), :]
+        no_dirac = self.diffuser.no_dirac[t.view(-1), :]
+
+        sigma_cond[sigma_cond / sigma_cond != sigma_cond / sigma_cond] = 0.
+        sigma_cond = 1. * dirac_zt_1 + dirac_z0 * 0. + no_dirac * sigma_cond
+        zt_1_rec = zt_1_rec * (1 - dirac_zt_1)
 
         xt_1_rec = self.decoder(zt_1_rec + sigma_cond * torch.randn_like(zt_1), t - 1).view(bs, -1)
+        sigma_cond[sigma_cond / sigma_cond != sigma_cond / sigma_cond] = 1.
 
         KL_xt_1 = ((xt_1 - xt_1_rec)**2).view(bs, -1).mean(1)
 
@@ -121,6 +132,8 @@ class HeatedLatentDiffusionModel(nn.Module):
 
         # TODO check effect of sigma_cond
         KL_zt = (((zt - zt_rec)/sigma_cond)**2).mean(1)
+
+        #KL_zt_1 = (((zt_1_rec_enc - zt_1_rec.detach())/sigma_cond)**2).mean(1)
 
         #loss = (KL_x0 + KL_zt + KL_xt + KL_diffusion).mean()
         loss = (KL_zt + KL_xt + KL_diffusion + KL_xt_1).mean()
@@ -164,7 +177,7 @@ class CNNHeatedLatentDiffusion(HeatedLatentDiffusionModel):
 
         enc_net = [kwargs['enc_w']] * kwargs['enc_l']
         dec_net = [kwargs['dec_w']] * kwargs['dec_l']
-        trans_net = [kwargs['trans_w']] * kwargs['trans_l']
+        trans_net = [[kwargs['trans_w']] * kwargs['trans_l']] * kwargs['n_res_blocks']
 
         self.encoder = DCEncoder(self.img_size, self.latent_s, enc_net, t_dim=self.t_emb_s, pos_enc=pos_enc)
         self.decoder = decoder_types[kwargs['decoder_type']](self.encoder.features_dim, kwargs['var_sizes'], dec_net, t_dim=self.t_emb_s,
@@ -174,6 +187,6 @@ class CNNHeatedLatentDiffusion(HeatedLatentDiffusionModel):
                                              betas_max=[self.beta_max]*len(kwargs['ts_min']),
                                              ts_min=kwargs['ts_min'], ts_max=kwargs['ts_max'],
                                              var_sizes=kwargs['var_sizes'])
-        self.latent_transition = TransitionNet(self.latent_s, trans_net, self.t_emb_s, self.diffuser, pos_enc=pos_enc,
+        self.latent_transition = ImprovedTransitionNet(self.latent_s, trans_net, self.t_emb_s, self.diffuser, pos_enc=pos_enc,
                                                simplified_trans=kwargs['simplified_trans'])
 

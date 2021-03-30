@@ -105,12 +105,12 @@ class AsynchronousDiffuser(nn.Module):
 
         return mu + sigma_cond * torch.randn_like(z_t)
 
-    def past_sample(self, mu_z_pred, t_1):
+    def past_sample(self, mu_z_pred, t_1, temperature=1.):
         sigma_cond = ((1 - self.alphas[t_1.view(-1), :]) / (1 - self.alphas[t_1.view(-1) + 1, :]) * self.betas[t_1.view(-1) + 1, :]).sqrt()
         sigma_cond[sigma_cond / sigma_cond != sigma_cond / sigma_cond] = 0.
         no_dirac = self.no_dirac[t_1.view(-1), :]
         sigma_cond = 0 * (1 - no_dirac) + no_dirac * sigma_cond
-        return mu_z_pred + torch.randn_like(mu_z_pred) * sigma_cond#self.betas[t_1.view(-1)+1, :].sqrt()
+        return mu_z_pred + torch.randn_like(mu_z_pred) * sigma_cond * temperature#self.betas[t_1.view(-1)+1, :].sqrt()
 
 
 class TransitionNet(nn.Module):
@@ -118,7 +118,7 @@ class TransitionNet(nn.Module):
         super(TransitionNet, self).__init__()
         layers = [z_dim + t_dim] + layers + [z_dim]
         net = []
-        for l1, l2 in zip(layers[:-1], layers[1:]):
+        for l1, l2 in zip(layers[0][:-1], layers[0][1:]):
             net += [nn.Linear(l1, l2), act()]
         net.pop()
         self.net = nn.Sequential(*net)
@@ -164,10 +164,75 @@ class TransitionNet(nn.Module):
                 #print(alpha_t.sqrt().min())
                 #print(((1 - alpha_t)/(1 - alpha_bar_t).sqrt()).max())
                 mu_z_pred = (z_t - beta_t/(1 - alpha_bar_t).sqrt() * mu_z_pred)/alpha_t.sqrt()
-                z_t = z_t * is_dirac.float() + (1 - is_dirac.float()) * self.diffuser.past_sample(mu_z_pred, t_t)
+                z_t = z_t * is_dirac.float() + (1 - is_dirac.float()) * self.diffuser.past_sample(mu_z_pred, t_t, temperature)
                 #print(z_t.norm(), z_t.std(), z_t.mean())
             else:
-                z_t = self.diffuser.past_sample(mu_z_pred, t_t)
+                z_t = self.diffuser.past_sample(mu_z_pred, t_t, temperature)
+        #print(z_t.norm(), z_t.std(), z_t.mean())
+        return z_t
+
+
+
+class ImprovedTransitionNet(nn.Module):
+    def __init__(self, z_dim, layers, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=False):
+        super(ImprovedTransitionNet, self).__init__()
+        self.nets = nn.ModuleList()
+        for l in layers:
+            net = []
+            layer = [z_dim + t_dim] + l + [z_dim]
+            for l1, l2 in zip(layer[:-1], layer[1:]):
+                net += [nn.Linear(l1, l2), act()]
+            self.nets.append(nn.Sequential(*net))
+        #net.pop()
+        #self.net = nn.Sequential(*net)
+        self.diffuser = diffuser
+        self.z_dim = z_dim
+        self.device = 'cpu'
+        self.pos_enc = pos_enc
+        self.simplified_trans = simplified_trans
+
+    def forward(self, z, t):
+
+        t = self.pos_enc(t) if self.pos_enc is not None else t
+        out = z
+        for net in self.nets:
+            out = net((torch.cat((z, t), 1))) + out
+
+        return out#self.net(torch.cat((z, t), 1)) #+ z
+
+
+    def to(self, device):
+        super().to(device)
+        self.device = device
+        return self
+
+    def sample(self, nb_samples, t0=0, temperature=1.):
+        if self.diffuser is None:
+            raise NotImplementedError
+
+        zT = torch.randn(nb_samples, self.z_dim).to(self.device) * temperature
+        T = self.diffuser.T
+        z_t = zT
+        for t in range(T - 1, t0-1, -1):
+            t_t = torch.ones(nb_samples, 1).to(self.device).long() * t
+
+            mu_z_pred = self.forward(z_t, t_t)
+            if self.simplified_trans:
+                alpha_bar_t = self.diffuser.alphas[t_t.view(-1) + 1, :]
+                alpha_t = self.diffuser.alphas_t[t_t.view(-1) + 1, :]
+                beta_t = self.diffuser.betas[t_t.view(-1) + 1, :]
+
+                is_dirac = torch.logical_or((1 - alpha_bar_t) == 0., alpha_t == 1.)
+                beta_t[is_dirac] = 1.
+                alpha_bar_t[is_dirac] = 0.
+                alpha_t[is_dirac] = 1.
+                #print(alpha_t.sqrt().min())
+                #print(((1 - alpha_t)/(1 - alpha_bar_t).sqrt()).max())
+                mu_z_pred = (z_t - beta_t/(1 - alpha_bar_t).sqrt() * mu_z_pred)/alpha_t.sqrt()
+                z_t = z_t * is_dirac.float() + (1 - is_dirac.float()) * self.diffuser.past_sample(mu_z_pred, t_t, temperature)
+                #print(z_t.norm(), z_t.std(), z_t.mean())
+            else:
+                z_t = self.diffuser.past_sample(mu_z_pred, t_t, temperature)
         #print(z_t.norm(), z_t.std(), z_t.mean())
         return z_t
 

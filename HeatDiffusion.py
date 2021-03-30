@@ -15,18 +15,19 @@ config_celeba = {
         'enc_l': 1,
         'dec_w': 300,
         'dec_l': 1,
-        'trans_w': 1000,
-        'trans_l': 5,
+        'trans_w': 400,
+        'trans_l': 3,
+        'n_res_blocks': 5,
         "beta_min": 0.01,
         "beta_max": .75,
         'simplified_trans': False,
         't_emb_s': 50,
         'T': 50,
-        'level_max': 1.5,
+        'level_max': 1.,
         'debug': False,
         'ts_min': [0, 5, 10, 15, 20, 30, 35, 40],
-        'ts_max': [10, 15, 20, 30, 35, 40, 45, 50],
-        'var_sizes': [50, 50, 50, 50, 50, 50, 50, 50],
+        'ts_max': [15, 20, 25, 30, 35, 40, 45, 50],
+        'var_sizes': [75, 75, 75, 75, 50, 50, 50, 50],
         'decoder_type': 'Progressive2',
         'batch_size': 256
     }
@@ -39,6 +40,7 @@ config_celeba_hq = {
         'dec_l': 1,
         'trans_w': 1000,
         'trans_l': 5,
+        'n_res_blocks': 3,
         "beta_min": 0.01,
         "beta_max": .35,
         'simplified_trans': False,
@@ -60,18 +62,19 @@ config_cifar = {
         'enc_l': 1,
         'dec_w': 300,
         'dec_l': 1,
-        'trans_w': 500,
-        'trans_l': 5,
+        'trans_w': 400,
+        'trans_l': 4,
+        'n_res_blocks': 3,
         "beta_min": 0.01,
-        "beta_max": .3,
+        "beta_max": .75,
         'simplified_trans': False,
         't_emb_s': 50,
         'T': 50,
-        'level_max': 1.25,
+        'level_max': .75,
         'debug': False,
         'ts_min': [0, 5, 10, 15, 20, 30, 35, 40],
         'ts_max': [10, 15, 20, 30, 35, 40, 45, 50],
-        'var_sizes': [50, 50, 50, 50, 50, 50, 50, 50],
+        'var_sizes': [40, 40, 40, 40, 40, 40, 40, 40],
         'decoder_type': 'Progressive2',
         'batch_size': 256
     }
@@ -80,7 +83,7 @@ if __name__ == "__main__":
     freeze_support()
     wandb.init(project="heat_diffusion", entity="awehenkel")
 
-    config = config_cifar
+    config = config_celeba
 
 
     bs = config['batch_size']
@@ -125,7 +128,7 @@ if __name__ == "__main__":
     dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     model = CNNHeatedLatentDiffusion(**config).to(dev)
 
-    optimizer = optim.AdamW(model.parameters(), lr=.0001)
+    optimizer = optim.Adam(model.parameters(), lr=.0005)
     #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5,
     #                                                       patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
 
@@ -162,15 +165,13 @@ if __name__ == "__main__":
             #x0 = (x0 - x0_mean.unsqueeze(0).expand(x0.shape[0], -1)) / x0_std.unsqueeze(0).expand(x0.shape[0], -1)
             #xt = (xt - xt_mean.unsqueeze(0).expand(xt.shape[0], -1)) / xt_std.unsqueeze(0).expand(xt.shape[0], -1)
 
-
-
             optimizer.zero_grad()
 
             loss = model.loss(x0, xt, xt_1, t)
 
             loss.backward()
 
-            #nn.utils.clip_grad_norm_(model.parameters(), .0000001)
+            nn.utils.clip_grad_norm_(model.parameters(), .25)
 
             train_loss += loss.detach()
             optimizer.step()
@@ -178,7 +179,7 @@ if __name__ == "__main__":
                 print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                     epoch, batch_idx * bs, len(train_loader.dataset),
                            100. * batch_idx / len(train_loader), loss.item() / bs))
-        scheduler.step(train_loss)
+        #scheduler.step(train_loss)
         return train_loss.item() / len(train_loader.dataset)
 
     def test(epoch):
@@ -191,7 +192,7 @@ if __name__ == "__main__":
             else:
                 x0 = x0.view(x0.shape[0], -1).to(dev)
                 xt = x0
-                t = torch.zeros(x0.shape[0], 1).to(dev).long()
+                t = torch.zeros(x0.shape[0], 1).to(dev).long() + 1
 
             #x0 = (x0 - x0_mean.unsqueeze(0).expand(x0.shape[0], -1)) / x0_std.unsqueeze(0).expand(
             #    x0.shape[0], -1)

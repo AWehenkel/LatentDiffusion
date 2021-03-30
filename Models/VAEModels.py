@@ -27,7 +27,7 @@ class VAEModel(nn.Module):
 
         # Encoding
         mu_z, log_sigma_z = torch.split(self.enc(x0.view(-1, *self.img_size)), self.latent_s, 1)
-        KL_z = (-log_sigma_z + (mu_z ** 2)/2 + torch.exp(log_sigma_z)/2).sum(1)
+        KL_z = (-log_sigma_z/2 + (mu_z ** 2)/2 + torch.exp(log_sigma_z)/2).sum(1)
 
         # Decoding
         mu_x_pred = self.dec(mu_z + torch.exp(log_sigma_z) * torch.randn(mu_z.shape, device=self.device))
