@@ -4,6 +4,7 @@ from Models import VAEModel
 import wandb
 from utils import getDataLoader, logit_back
 import os
+import argparse
 
 wandb.init(project="vae", entity="awehenkel")
 
@@ -11,14 +12,20 @@ wandb.init(project="vae", entity="awehenkel")
 if __name__ == "__main__":
     bs = 100
     config = {
-        'data': 'CIFAR10',
-        'latent_s': 100,
+        'data': 'celeba',
+        'latent_s': 500,
         'CNN': True,
         'enc_w': 300,
         'enc_l': 1,
         'dec_w': 300,
         'dec_l': 1,
     }
+    parser = argparse.ArgumentParser(description='VAE running parameters')
+    for k, v in config.items():
+        parser.add_argument("-" + k, default=v)
+
+    config = parser.parse_args()
+
     wandb.config.update(config)
     config = wandb.config
     train_loader, test_loader, img_size = getDataLoader(config["data"], bs)

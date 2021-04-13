@@ -16,7 +16,7 @@ class VAEModel(nn.Module):
 
         if self.CNN:
             self.enc = DCEncoder(self.img_size, self.latent_s*2, enc_net, t_dim=0)
-            self.dec = DCDecoder(self.enc.features_dim, self.latent_s, dec_net, t_dim=0,
+            self.dec = DCDecoder(self.enc.features_dim, [self.latent_s], dec_net, t_dim=0,
                                           out_c=self.img_size[0], img_width=self.img_size[1])
         else:
             self.enc = TemporalEncoder(32**2, self.latent_s*2, enc_net, 0)

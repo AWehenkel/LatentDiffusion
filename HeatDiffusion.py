@@ -6,6 +6,7 @@ from utils import getDataLoader, logit_back
 from multiprocessing import Process, freeze_support
 import os
 import torch.nn as nn
+import argparse
 
 config_celeba = {
         'data': 'celeba',
@@ -84,6 +85,12 @@ if __name__ == "__main__":
     wandb.init(project="heat_diffusion", entity="awehenkel")
 
     config = config_celeba
+
+    parser = argparse.ArgumentParser(description='Heat diffusion running parameters')
+    for k, v in config.items():
+        parser.add_argument("-" + k, default=v)
+
+    config = parser.parse_args()
 
 
     bs = config['batch_size']

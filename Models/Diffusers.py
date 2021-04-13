@@ -103,7 +103,7 @@ class AsynchronousDiffuser(nn.Module):
 
         mu = z_t * dirac_zt_1 + dirac_z0 * z_t0 + no_dirac * mu_cond
 
-        return mu + sigma_cond * torch.randn_like(z_t)
+        return mu #+ sigma_cond * torch.randn_like(z_t)
 
     def past_sample(self, mu_z_pred, t_1, temperature=1.):
         sigma_cond = ((1 - self.alphas[t_1.view(-1), :]) / (1 - self.alphas[t_1.view(-1) + 1, :]) * self.betas[t_1.view(-1) + 1, :]).sqrt()
@@ -174,7 +174,7 @@ class TransitionNet(nn.Module):
 
 
 class ImprovedTransitionNet(nn.Module):
-    def __init__(self, z_dim, layers, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=False):
+    def __init__(self, z_dim, layers, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=False, device='cpu'):
         super(ImprovedTransitionNet, self).__init__()
         self.nets = nn.ModuleList()
         for l in layers:
@@ -182,12 +182,13 @@ class ImprovedTransitionNet(nn.Module):
             layer = [z_dim + t_dim] + l + [z_dim]
             for l1, l2 in zip(layer[:-1], layer[1:]):
                 net += [nn.Linear(l1, l2), act()]
+            net.pop()
             self.nets.append(nn.Sequential(*net))
         #net.pop()
         #self.net = nn.Sequential(*net)
         self.diffuser = diffuser
         self.z_dim = z_dim
-        self.device = 'cpu'
+        self.device = device
         self.pos_enc = pos_enc
         self.simplified_trans = simplified_trans
 
@@ -196,7 +197,7 @@ class ImprovedTransitionNet(nn.Module):
         t = self.pos_enc(t) if self.pos_enc is not None else t
         out = z
         for net in self.nets:
-            out = net((torch.cat((z, t), 1))) + out
+            out = net((torch.cat((z, t), 1))) #+ out
 
         return out#self.net(torch.cat((z, t), 1)) #+ z
 
