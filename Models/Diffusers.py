@@ -2,33 +2,70 @@ import torch
 import torch.nn as nn
 #from NFmodels import AutoregressiveConditioner, AffineNormalizer, buildFCNormalizingFlow
 
+
+# This code shamely steals lines from Improved Denoising Diffusion Probabilistic Models
+
 class DataDiffuser(nn.Module):
     def __init__(self, beta_min=1e-4, beta_max=.02, t_min=0, t_max=1000):
         super(DataDiffuser, self).__init__()
-        self.register_buffer('betas', torch.arange(beta_min, beta_max + 1e-10, (beta_max - beta_min) / (t_max - t_min)))
-        self.register_buffer('alphas_t', (1 - self.betas))
-        self.register_buffer('alphas', self.alphas_t.log().cumsum(0).exp())
 
-    def diffuse(self, x_t0, t, t0=0, noise=None):
+        self.register_buffer('betas', torch.linspace(beta_min, beta_max, t_max - t_min + 1))
+        self.T = t_max
+        self.register_buffer('alphas', 1 - self.betas)
+        self.register_buffer('alphas_cumprod', self.alphas.log().cumsum(0).exp())
+        self.register_buffer('alphas_cumprod_prev', torch.cat((torch.tensor([1.]), self.alphas_cumprod[:-1]), 0))
+        self.register_buffer('alphas_cumprod_next', torch.cat((self.alphas_cumprod[1:], torch.tensor([0.])), 0))
+
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(self.alphas_cumprod))
+        self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1.0 - self.alphas_cumprod))
+        self.register_buffer('log_one_minus_alphas_cumprod', torch.log(1.0 - self.alphas_cumprod))
+        self.register_buffer('sqrt_recip_alphas_cumprod', torch.sqrt(1.0 / self.alphas_cumprod))
+        self.register_buffer('sqrt_recipm1_alphas_cumprod', torch.sqrt(1.0 / self.alphas_cumprod - 1))
+
+        # calculations for posterior q(x_{t-1} | x_t, x_0)
+        self.register_buffer(
+            'posterior_variance', self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
+
+        # log calculation clipped because the posterior variance is 0 at the
+        # beginning of the diffusion chain.
+        self.register_buffer(
+            'posterior_log_variance_clipped', torch.log(torch.cat((self.posterior_variance[[1]], self.posterior_variance[1:]), 0)))
+
+        self.register_buffer(
+            'posterior_mean_coef1', self.betas * torch.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
+
+        self.register_buffer(
+            'posterior_mean_coef2', (1.0 - self.alphas_cumprod_prev) * torch.sqrt(self.alphas) / (1.0 - self.alphas_cumprod))
+
+    def diffuse(self, x_t0, t, noise=None):
+        """
+        Diffuse the data for a given number of diffusion steps.
+
+        In other words, sample from q(x_t | x_0).
+        """
+        assert x_t0.shape[0] == t.shape[0]
+
         if noise is None:
             noise = torch.randn(x_t0.shape).to(x_t0.device)
-        alpha_t0 = 1 * (t0 == 0).float() + (1 - (t0 == 0).float()) * self.alphas[t0 - 1]
+        mu = self.sqrt_alphas_cumprod[t].view(-1, 1) * x_t0
+        sigma = self.sqrt_one_minus_alphas_cumprod[t].view(-1, 1)
+        return mu + noise * sigma, (mu, sigma)
 
-        mu = x_t0 * (self.alphas[t] / alpha_t0).sqrt().unsqueeze(1).expand(-1, x_t0.shape[1]).float()
-        # mu = x_t0 * self.alphas[t].sqrt().unsqueeze(1).expand(-1, x_t0.shape[1]).float()
-        sigma_t = ((self.alphas[t] / alpha_t0) * (1 - alpha_t0) + (1 - self.alphas[t])).sqrt()
-        sigma = sigma_t.unsqueeze(1).expand(-1, x_t0.shape[1]).float()
-        # sigma = (1 - self.alphas[t].unsqueeze(1).expand(-1, x_t0.shape[1]).float()).sqrt()
-        return mu + noise * sigma, sigma_t
+    def prev_mean_var(self, x_t, x_0, t):
+        """
+        Compute the mean and variance of the diffusion posterior: q(x_{t-1} | x_t, x_0)
 
-    def prev_mean(self, x_t, x_0, t):
-        alphas = self.alphas.unsqueeze(1).expand(-1, x_t.shape[1]).float()
-        betas = self.betas.unsqueeze(1).expand(-1, x_t.shape[1]).float()
-        alphas_t = self.alphas_t.unsqueeze(1).expand(-1, x_t.shape[1]).float()
-        mu = alphas[t - 1].sqrt() * betas[t] * x_0 / (1 - alphas[t]) + alphas_t[t].sqrt() * (
-                    1 - alphas[t - 1]) * x_t / (1 - alphas[t])
-        sigma = ((1 - self.alphas[t - 1]) / (1 - self.alphas[t]) * self.betas[t]).sqrt()
+        """
+
+        mu = self.posterior_mean_coef1[t].view(-1, 1) * x_0 + self.posterior_mean_coef2[t].view(-1, 1) * x_t
+        sigma = self.posterior_variance[t].view(-1, 1)
         return mu, sigma
+
+    def past_sample(self, mu_z_pred, t_1, temperature=1.):
+        log_sigma = self.posterior_log_variance_clipped[t_1].view(-1, 1)
+        noise = torch.randn_like(mu_z_pred)
+        return mu_z_pred + noise * torch.exp(.5 * log_sigma)
 
 
 class AsynchronousDiffuser(nn.Module):
@@ -48,37 +85,157 @@ class AsynchronousDiffuser(nn.Module):
         for b_min, b_max, t_min, t_max, var_size in zip(betas_min, betas_max, ts_min, ts_max, var_sizes):
             beta = torch.zeros(var_size, T + 1)
             beta[:, t_min:t_max+1] = torch.linspace(b_min, b_max, 1 + t_max - t_min)
-            alpha_t = 1 - beta
-            alpha = alpha_t.cumprod(1)
 
             betas.append(beta)
-            alphas_t.append(alpha_t)
-            alphas.append(alpha)
 
-            dz0 = torch.zeros_like(alpha)
-            dz0[:, :t_min] = 1.
-            dzt1 = torch.zeros_like(alpha)
+            dz0 = torch.zeros_like(beta)
+            dz0[:, :t_min+1] = 1.
+            dzt1 = torch.zeros_like(beta)
             dzt1[:, t_max+1:] = 1.
             dirac_z0.append(dz0)
             dirac_zt_1.append(dzt1)
 
         self.register_buffer('betas', torch.cat(betas, 0).permute(1, 0).float())
-        self.register_buffer('alphas_t', torch.cat(alphas, 0).permute(1, 0).float())
-        self.register_buffer('alphas', torch.cat(alphas, 0).permute(1, 0).float())
+        self.T = t_max
+        self.register_buffer('alphas', 1 - self.betas)
+        self.register_buffer('alphas_cumprod', self.alphas.log().cumsum(0).exp())
+        self.register_buffer('alphas_cumprod_prev', torch.cat((torch.tensor([1.]).view(1, 1).expand(1, sum(var_sizes)), self.alphas_cumprod[:-1, :]), 0))
+        self.register_buffer('alphas_cumprod_next', torch.cat((self.alphas_cumprod[1:, :], torch.tensor([0.]).view(1, 1).expand(1, sum(var_sizes))), 0))
+
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(self.alphas_cumprod))
+        self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1.0 - self.alphas_cumprod))
+        self.register_buffer('log_one_minus_alphas_cumprod', torch.log(1.0 - self.alphas_cumprod))
+        self.register_buffer('sqrt_recip_alphas_cumprod', torch.sqrt(1.0 / self.alphas_cumprod))
+        self.register_buffer('sqrt_recipm1_alphas_cumprod', torch.sqrt(1.0 / self.alphas_cumprod - 1))
+
+        # calculations for posterior q(x_{t-1} | x_t, x_0)
+        self.register_buffer(
+            'posterior_variance', self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
+
+        # log calculation clipped because the posterior variance is 0 at the
+        # beginning of the diffusion chain.
+        self.register_buffer(
+            'posterior_log_variance_clipped',
+            torch.log(torch.cat((self.posterior_variance[[1]], self.posterior_variance[1:]), 0)))
+
+        self.register_buffer(
+            'posterior_mean_coef1', self.betas * torch.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
+
+        self.register_buffer(
+            'posterior_mean_coef2',
+            (1.0 - self.alphas_cumprod_prev) * torch.sqrt(self.alphas) / (1.0 - self.alphas_cumprod))
+
+
         self.register_buffer('dirac_z0', torch.cat(dirac_z0, 0).permute(1, 0).float())
         self.register_buffer('dirac_zt_1', torch.cat(dirac_zt_1, 0).permute(1, 0).float())
-        no_dirac = torch.zeros_like(self.betas)
-        no_dirac[self.betas != 0.] = 1.
+        no_dirac = torch.ones_like(self.betas)
+        no_dirac[self.dirac_z0 == 1.] = 0.
+        no_dirac[self.dirac_zt_1 == 1.] = 0.
         self.register_buffer('no_dirac', no_dirac)
+        # TODO CHECK BELOW IS OK.
+        #self.sqrt_one_minus_alphas_cumprod[self.dirac_z0 == 0] = 0.
+        #self.posterior_mean_coef1[self.posterior_mean_coef1/ self.posterior_mean_coef1 != self.posterior_mean_coef1/self.posterior_mean_coef1] = 0.
+        #self.posterior_mean_coef2[self.posterior_mean_coef2/ self.posterior_mean_coef2 != self.posterior_mean_coef2/self.posterior_mean_coef2] = 0.
 
+    def _diffuse(self, z_t0, t):
+        """
+        Diffuse the data for a given number of diffusion steps.
 
-    def diffuse(self, z_t0, t):
+        In other words, sample from q(x_t | x_0).
+        """
+        assert z_t0.shape[0] == t.shape[0]
         t = t.view(-1)
-        mu = z_t0 * self.alphas[t, :].sqrt()
-        sigma = (1 - self.alphas[t, :]).sqrt()
-        z_t = mu + torch.randn_like(z_t0) * sigma
-        return z_t
+        noise = torch.randn_like(z_t0)
+        mu = self.sqrt_alphas_cumprod[t, :] * z_t0
+        sigma = self.sqrt_one_minus_alphas_cumprod[t, :]
+        return mu + noise * sigma, (mu, sigma)
 
+    def diffuse(self, z_t0, t, t0=None):
+        if t0 is None:
+            return self._diffuse(z_t0, t)
+        """
+        Diffuse the data from t0 to t_end.
+
+        In other words, sample from q(x_t | x_0).
+        """
+        assert z_t0.shape[0] == t.shape[0] == t0.shape[0]
+
+        sqrt_alphas_cumprod = self.sqrt_alphas_cumprod[t.view(-1), :]/self.sqrt_alphas_cumprod[t0.view(-1), :]
+        sqrt_one_minus_alphas_cumprod = (1 - sqrt_alphas_cumprod**2).sqrt()
+
+        mu = sqrt_alphas_cumprod * z_t0
+        sigma = sqrt_one_minus_alphas_cumprod
+        noise = torch.randn_like(z_t0)
+
+        return mu + noise * sigma, (mu, sigma)
+
+    def _prev_mean_var(self, z_t, z_0, t):
+        """
+        Compute the mean and variance of the diffusion posterior: q(x_{t-1} | x_t, x_0)
+
+        """
+        t = t.view(-1)
+
+        dirac_z0 = self.dirac_z0[t, :]
+        dirac_zt_1 = self.dirac_zt_1[t, :]
+        no_dirac = self.no_dirac[t, :]
+
+        mu_cond = self.posterior_mean_coef1[t, :] * z_0 + self.posterior_mean_coef2[t, :] * z_t
+        mu_cond[mu_cond / mu_cond != mu_cond / mu_cond] = 0.
+
+        mu_cond = z_t * dirac_zt_1 + dirac_z0 * z_0 + no_dirac * mu_cond
+
+        sigma = self.posterior_variance[t, :]
+        return mu_cond, sigma
+
+    def prev_mean_var(self, z_t, z_0, t, t0=None):
+        """
+        Compute the mean and variance of the diffusion posterior: q(x_{t-1} | x_t, x_t0)
+
+        """
+
+        if t0 is None:
+            return self._prev_mean_var(z_t, z_0, t)
+
+        t = t.view(-1)
+
+        dirac_z0 = self.dirac_z0[t, :]
+        dirac_zt_1 = self.dirac_zt_1[t, :]
+        no_dirac = self.no_dirac[t, :]
+
+        sqrt_alphas_cumprod = self.sqrt_alphas_cumprod[t.view(-1), :] / self.sqrt_alphas_cumprod[t0.view(-1), :]
+        sqrt_alphas_cumprod_prev = self.sqrt_alphas_cumprod[t.view(-1)-1, :] / self.sqrt_alphas_cumprod[t0.view(-1), :]
+        sqrt_one_minus_alphas_cumprod = (1 - sqrt_alphas_cumprod ** 2).sqrt()
+        sqrt_one_minus_alphas_cumprod_prev = (1 - sqrt_alphas_cumprod_prev ** 2).sqrt()
+        betas = self.betas[t.view(-1), :]
+        alphas = self.alphas[t.view(-1), :]
+        posterior_mean_coef1 = betas * sqrt_alphas_cumprod_prev/(sqrt_one_minus_alphas_cumprod)**2
+        posterior_mean_coef2 = sqrt_one_minus_alphas_cumprod_prev**2 * alphas.sqrt()/(sqrt_one_minus_alphas_cumprod)**2
+
+        mu_cond = posterior_mean_coef1 * z_0 + posterior_mean_coef2 * z_t
+        mu_cond[mu_cond / mu_cond != mu_cond / mu_cond] = 0.
+
+        mu_cond = z_t * dirac_zt_1 + dirac_z0 * z_0 + no_dirac * mu_cond
+
+        sigma = sqrt_one_minus_alphas_cumprod_prev**2/sqrt_one_minus_alphas_cumprod**2 * betas
+        return mu_cond, sigma
+
+    def past_sample(self, mu_z_pred, t_1, temperature=1.):
+        t_1 = t_1.view(-1)
+
+        log_sigma = self.posterior_log_variance_clipped[t_1, :]
+        log_sigma[log_sigma / log_sigma != log_sigma / log_sigma] = 0.
+
+        no_dirac = self.no_dirac[t_1, :]
+        sigma = 0 * (1 - no_dirac) + no_dirac * torch.exp(.5 * log_sigma)
+        noise = torch.randn_like(mu_z_pred)
+
+        z_pred = (mu_z_pred + noise * sigma) * (1 - self.dirac_zt_1[t_1, :]) + noise * self.dirac_zt_1[t_1, :]
+
+        return z_pred
+
+    '''
     def reverse(self, z_t0, z_t, t_1):
         t_1 = t_1.view(-1)
 
@@ -111,6 +268,7 @@ class AsynchronousDiffuser(nn.Module):
         no_dirac = self.no_dirac[t_1.view(-1), :]
         sigma_cond = 0 * (1 - no_dirac) + no_dirac * sigma_cond
         return mu_z_pred + torch.randn_like(mu_z_pred) * sigma_cond * temperature#self.betas[t_1.view(-1)+1, :].sqrt()
+    '''
 
 
 class TransitionNet(nn.Module):
@@ -153,19 +311,7 @@ class TransitionNet(nn.Module):
 
             mu_z_pred = self.forward(z_t, t_t)
             if self.simplified_trans:
-                alpha_bar_t = self.diffuser.alphas[t_t.view(-1) + 1, :]
-                alpha_t = self.diffuser.alphas_t[t_t.view(-1) + 1, :]
-                beta_t = self.diffuser.betas[t_t.view(-1) + 1, :]
-
-                is_dirac = torch.logical_or((1 - alpha_bar_t) == 0., alpha_t == 1.)
-                beta_t[is_dirac] = 1.
-                alpha_bar_t[is_dirac] = 0.
-                alpha_t[is_dirac] = 1.
-                #print(alpha_t.sqrt().min())
-                #print(((1 - alpha_t)/(1 - alpha_bar_t).sqrt()).max())
-                mu_z_pred = (z_t - beta_t/(1 - alpha_bar_t).sqrt() * mu_z_pred)/alpha_t.sqrt()
-                z_t = z_t * is_dirac.float() + (1 - is_dirac.float()) * self.diffuser.past_sample(mu_z_pred, t_t, temperature)
-                #print(z_t.norm(), z_t.std(), z_t.mean())
+                z_t = None
             else:
                 z_t = self.diffuser.past_sample(mu_z_pred, t_t, temperature)
         #print(z_t.norm(), z_t.std(), z_t.mean())
@@ -194,10 +340,20 @@ class ImprovedTransitionNet(nn.Module):
 
     def forward(self, z, t):
 
-        t = self.pos_enc(t) if self.pos_enc is not None else t
+        t_enc = self.pos_enc(t) if self.pos_enc is not None else t
+        t = t.view(-1)
         out = z
         for net in self.nets:
-            out = net((torch.cat((z, t), 1))) #+ out
+            out = net((torch.cat((z, t_enc), 1))) #+ out
+
+        if self.simplified_trans:
+
+            factor = self.diffuser.betas[t, :]/(1 - self.diffuser.alphas_cumprod[t, :]).sqrt()
+            div = self.diffuser.alphas[t, :].sqrt()
+            factor[factor/factor != factor/factor] = 0
+            div[div/div != div/div] = 1
+
+            out = self.diffuser.no_dirac[t, :] * (z - factor * out)/div + (1 - self.diffuser.no_dirac[t, :]) * z
 
         return out#self.net(torch.cat((z, t), 1)) #+ z
 
@@ -214,26 +370,12 @@ class ImprovedTransitionNet(nn.Module):
         zT = torch.randn(nb_samples, self.z_dim).to(self.device) * temperature
         T = self.diffuser.T
         z_t = zT
-        for t in range(T - 1, t0-1, -1):
+        for t in range(T, t0-1, -1):
             t_t = torch.ones(nb_samples, 1).to(self.device).long() * t
 
             mu_z_pred = self.forward(z_t, t_t)
-            if self.simplified_trans:
-                alpha_bar_t = self.diffuser.alphas[t_t.view(-1) + 1, :]
-                alpha_t = self.diffuser.alphas_t[t_t.view(-1) + 1, :]
-                beta_t = self.diffuser.betas[t_t.view(-1) + 1, :]
 
-                is_dirac = torch.logical_or((1 - alpha_bar_t) == 0., alpha_t == 1.)
-                beta_t[is_dirac] = 1.
-                alpha_bar_t[is_dirac] = 0.
-                alpha_t[is_dirac] = 1.
-                #print(alpha_t.sqrt().min())
-                #print(((1 - alpha_t)/(1 - alpha_bar_t).sqrt()).max())
-                mu_z_pred = (z_t - beta_t/(1 - alpha_bar_t).sqrt() * mu_z_pred)/alpha_t.sqrt()
-                z_t = z_t * is_dirac.float() + (1 - is_dirac.float()) * self.diffuser.past_sample(mu_z_pred, t_t, temperature)
-                #print(z_t.norm(), z_t.std(), z_t.mean())
-            else:
-                z_t = self.diffuser.past_sample(mu_z_pred, t_t, temperature)
+            z_t = self.diffuser.past_sample(mu_z_pred, t_t, temperature)
         #print(z_t.norm(), z_t.std(), z_t.mean())
         return z_t
 
@@ -299,4 +441,13 @@ class NFTransitionNet(nn.Module):
         return z_t
 
 
+
+
+m = AsynchronousDiffuser([0.0001], [.02], [0], [1000], [1])
+
+z0 = torch.randn(10, 1)
+t = torch.randint(1, 1000, (10, 1))
+zt, _ = m.diffuse(z0, t)
+print(zt)
+print(m.prev_mean_var(zt, z0, t)[1], m.prev_mean_var(zt, z0, t, t*0)[1])
 '''

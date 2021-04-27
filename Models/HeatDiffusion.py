@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import math
 from Models import TemporalDecoder, DCDecoder, DCEncoder, TemporalEncoder, AsynchronousDiffuser, TransitionNet, \
     SimpleImageDecoder, SimpleImageEncoder, PositionalEncoder, StupidPositionalEncoder, ProgressiveDecoder, \
     ProgressiveDecoder2, ImprovedTransitionNet
@@ -81,62 +82,47 @@ class HeatedLatentDiffusionModel(nn.Module):
 
     def loss(self, x0, xt, xt_1, t):
         bs = x0.shape[0]
+        T = self.diffuser.T
+        #print(bs)
+        #print(x0.mean().item(), self.encoder(torch.randn_like(x0.view(-1, *self.img_size)), t*0).mean().item())
 
-        z0 = self.encoder(x0.view(-1, *self.img_size), t * 0)
-        #x0_rec = self.decoder(z0, t).view(bs, -1)
-        #KL_x0 = ((x0 - x0_rec)**2).mean(1)
-
-        # TODO, should I detach z0?
-        zt = self.diffuser.diffuse(z0, t)
-
-        #zt_1_rec_enc = self.encoder(xt_1.view(-1, *self.img_size), t-1)
-
-        zt_rec = self.encoder(xt.view(-1, *self.img_size), t)
+        mu_zt_1, log_sigma_zt_1 = torch.split(self.encoder(xt_1.view(-1, *self.img_size), t-1), self.latent_s, 1)
+        zt_1 = torch.randn_like(mu_zt_1) * torch.exp(log_sigma_zt_1) + mu_zt_1
+        zt, _ = self.diffuser.diffuse(zt_1, t, t-1)
 
         xt_rec = self.decoder(zt, t).view(bs, -1)
-        KL_xt = ((xt - xt_rec)**2).view(bs, -1).mean(1)
+        KL_rec_t = ((xt_rec - xt)**2).sum(1)
 
-        zt_1 = self.diffuser.reverse(z0.detach(), zt, t - 1)
-        zt_1_rec = self.latent_transition(zt, t - 1)
+        xt_1_rec = self.decoder(zt_1, t-1).view(bs, -1)
+        KL_rec_t_1 = ((xt_1_rec - xt_1)**2).sum(1)
 
-        sigma_cond = ((1 - self.diffuser.alphas[t.view(-1) - 1, :]) / (
-                    1 - self.diffuser.alphas[t.view(-1), :]) * self.diffuser.betas[t.view(-1),
-                                                               :]).sqrt()
+        entropy_posterior_z = log_sigma_zt_1.sum(1) + math.log(2 * (math.pi * math.e) ** .5)
 
-        dirac_z0 = self.diffuser.dirac_z0[t.view(-1), :]
-        dirac_zt_1 = self.diffuser.dirac_zt_1[t.view(-1), :]
-        no_dirac = self.diffuser.no_dirac[t.view(-1), :]
+        t_end = (torch.rand((bs, 1), device=self.device) * (T - t)).long() + t
+        zt_end, _ = self.diffuser.diffuse(zt_1, t_end, t)
 
-        sigma_cond[sigma_cond / sigma_cond != sigma_cond / sigma_cond] = 0.
-        sigma_cond = 1. * dirac_zt_1 + dirac_z0 * 0. + no_dirac * sigma_cond
-        zt_1_rec = zt_1_rec * (1 - dirac_zt_1)
+        # HERE we trick to compute p(z_T|x_t) directly in order to take into account the known randomness of z_t
+        _, (mu_T, sigma_T) = self.diffuser.diffuse(mu_zt_1, t * 0 + T, t)
+        sigma_T = (sigma_T**2 - (sigma_T**2 - 1) * torch.exp(2*log_sigma_zt_1)).sqrt()
+        #print(torch.min(sigma_T))
 
-        xt_1_rec = self.decoder(zt_1_rec + sigma_cond * torch.randn_like(zt_1), t - 1).view(bs, -1)
-        sigma_cond[sigma_cond / sigma_cond != sigma_cond / sigma_cond] = 1.
+        if T >= 1:
+            mu_zt_end_1, sigma_zt_end_1 = self.diffuser.prev_mean_var(zt_end, zt_1, t_end, t-1)
+            zt_end_1_rec = self.latent_transition(zt_end, t_end - 1)
 
-        KL_xt_1 = ((xt_1 - xt_1_rec)**2).view(bs, -1).mean(1)
-
-        if self.simple_transition:
-            alpha_bar_t = self.diffuser.alphas[t.view(-1), :]
-            alpha_t = self.diffuser.alphas_t[t.view(-1), :]
-            beta_t = self.diffuser.betas[t.view(-1), :]
-
-            is_dirac = torch.logical_or((1 - alpha_bar_t) == 0., beta_t == 0.)
-            beta_t[is_dirac] = 1.
-
-
-            epsilon = is_dirac.float() * torch.zeros_like(zt) + (1 - is_dirac.float()) * ((zt - alpha_t.sqrt() * zt_1) * (1-alpha_bar_t.sqrt())/beta_t)
-            KL_diffusion = (((epsilon - zt_1_rec)/sigma_cond)** 2).mean(1)
+            KL_rev_diffusion = (((mu_zt_end_1 - zt_end_1_rec) ** 2)).sum(1)
         else:
-            KL_diffusion = (((zt_1 - zt_1_rec) / sigma_cond) ** 2).mean(1)
+            KL_rev_diffusion = 0.
 
-        # TODO check effect of sigma_cond
-        KL_zt = (((zt - zt_rec)/sigma_cond)**2).mean(1)
+        # TODO we know q(z_0|x) in closed form so we could avoid sampling and instead compute exactly p(z_T|x_0) and check KL with N(0, 1)
+        KL_prior_diffusion = (-torch.log(sigma_T) + (mu_T ** 2) / 2 + .5 * sigma_T ** 2).sum(1)
 
-        #KL_zt_1 = (((zt_1_rec_enc - zt_1_rec.detach())/sigma_cond)**2).mean(1)
+        KL_pst_z_prior_z = entropy_posterior_z - (KL_prior_diffusion + KL_rev_diffusion)
 
-        #loss = (KL_x0 + KL_zt + KL_xt + KL_diffusion).mean()
-        loss = (KL_zt + KL_xt + KL_diffusion + KL_xt_1).mean()
+        #print(entropy_posterior_z.mean(), KL_prior_diffusion.mean(), KL_rev_diffusion.mean())
+
+        loss = (KL_rec_t + KL_rec_t_1 - KL_pst_z_prior_z).mean(0)
+
         return loss
 
     def to(self, device):
@@ -151,7 +137,8 @@ class HeatedLatentDiffusionModel(nn.Module):
         return x_0
 
     def forward(self, x, t):
-        z0 = self.encoder(x.view(-1, *self.img_size), t * 0)
+        mu_z0, log_sigma_z0 = torch.split(self.encoder(x.view(-1, *self.img_size), t - 1), self.latent_s, 1)
+        z0 = torch.randn_like(mu_z0) * torch.exp(log_sigma_z0) + mu_z0
         x0_rec = self.decoder(z0, t).view(x.shape[0], -1)
         return x0_rec
 

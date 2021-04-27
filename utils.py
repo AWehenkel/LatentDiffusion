@@ -24,7 +24,7 @@ class RandomBlur(object):
 
     def __call__(self, x):
         x0 = x
-        t = np.random.randint(1, self.T + 1)
+        t = np.random.randint(0, self.T + 1)
         level = self.level_max / self.T * t * (t + 1)/2
         xt = x.filter(ImageFilter.GaussianBlur(level))
         level = self.level_max / self.T * t * (t - 1) / 2
@@ -40,17 +40,20 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
     if dataset == "MNIST":
         # MNIST Dataset
         train_dataset = datasets.MNIST(root='./mnist_data/', train=True, download=True, transform=transforms.Compose([
-                                          transforms.Resize((32, 32)), ToTensor(),  AddUniformNoise()]))
+                                          transforms.Resize((32, 32)), transforms.ToTensor(),
+                                            add_noise,
+                                          transforms.Normalize((0.5), (0.5))]))
         test_dataset = datasets.MNIST(root='./mnist_data/', train=False, download=True,
                                       transform=transforms.Compose([
                                           transforms.Resize((32, 32)),
-                                          ToTensor(),
-                                          AddUniformNoise()
+                                          transforms.ToTensor(),
+                                            add_noise,
+                                          transforms.Normalize((0.5), (0.5))
                                       ]))
 
         # Data Loader (Input Pipeline)
-        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True)
-        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False)
+        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True, num_workers=n_workers)
+        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False, num_workers=n_workers)
         img_size = [1, 32, 32]
     elif dataset == "CIFAR10":
         # CIFAR10 Dataset
@@ -72,8 +75,8 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                         ]))
 
         # Data Loader (Input Pipeline)
-        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True)
-        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False)
+        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True, num_workers=n_workers)
+        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False, num_workers=n_workers)
         img_size = [3, 32, 32]
     elif dataset == "Heated_CIFAR10":
         # CIFAR10 Dataset
@@ -91,8 +94,8 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                         ]))
 
         # Data Loader (Input Pipeline)
-        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True)
-        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False)
+        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True, num_workers=n_workers)
+        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False, num_workers=n_workers)
         img_size = [3, 32, 32]
 
     elif dataset == "celeba":
