@@ -89,10 +89,12 @@ class AsynchronousDiffuser(nn.Module):
             betas.append(beta)
 
             dz0 = torch.zeros_like(beta)
-            dz0[:, :t_min+1] = 1.
-            dzt1 = torch.zeros_like(beta)
-            dzt1[:, t_max+1:] = 1.
+            if t_min > 0:
+                dz0[:, :t_min] = 1.
+
             dirac_z0.append(dz0)
+            dzt1 = torch.zeros_like(beta)
+            dzt1[:, t_max + 1:] = 1.
             dirac_zt_1.append(dzt1)
 
         self.register_buffer('betas', torch.cat(betas, 0).permute(1, 0).float())
@@ -133,6 +135,14 @@ class AsynchronousDiffuser(nn.Module):
         no_dirac[self.dirac_z0 == 1.] = 0.
         no_dirac[self.dirac_zt_1 == 1.] = 0.
         self.register_buffer('no_dirac', no_dirac)
+
+        #print(self.posterior_mean_coef1)
+        self.posterior_mean_coef1[self.dirac_z0 == 1.] = 1.
+        self.posterior_mean_coef2[self.dirac_z0 == 1.] = 0.
+        #print(self.posterior_mean_coef1)
+        #print((self.posterior_mean_coef2 + self.posterior_mean_coef1).max())
+        #exit()
+
         # TODO CHECK BELOW IS OK.
         #self.sqrt_one_minus_alphas_cumprod[self.dirac_z0 == 0] = 0.
         #self.posterior_mean_coef1[self.posterior_mean_coef1/ self.posterior_mean_coef1 != self.posterior_mean_coef1/self.posterior_mean_coef1] = 0.
@@ -177,14 +187,9 @@ class AsynchronousDiffuser(nn.Module):
         """
         t = t.view(-1)
 
-        dirac_z0 = self.dirac_z0[t, :]
-        dirac_zt_1 = self.dirac_zt_1[t, :]
-        no_dirac = self.no_dirac[t, :]
-
         mu_cond = self.posterior_mean_coef1[t, :] * z_0 + self.posterior_mean_coef2[t, :] * z_t
-        mu_cond[mu_cond / mu_cond != mu_cond / mu_cond] = 0.
 
-        mu_cond = z_t * dirac_zt_1 + dirac_z0 * z_0 + no_dirac * mu_cond
+        mu_cond = mu_cond
 
         sigma = self.posterior_variance[t, :]
         return mu_cond, sigma
@@ -343,19 +348,23 @@ class ImprovedTransitionNet(nn.Module):
         t_enc = self.pos_enc(t) if self.pos_enc is not None else t
         t = t.view(-1)
         out = z
-        for net in self.nets:
-            out = net((torch.cat((z, t_enc), 1))) #+ out
 
         if self.simplified_trans:
+            for net in self.nets:
+                out = net((torch.cat((z, t_enc), 1)))
 
-            factor = self.diffuser.betas[t, :]/(1 - self.diffuser.alphas_cumprod[t, :]).sqrt()
+            denom = (1 - self.diffuser.alphas_cumprod[t, :]).sqrt()
+            denom[denom == 0.] = 1e-6
+            factor = self.diffuser.betas[t, :]/denom
             div = self.diffuser.alphas[t, :].sqrt()
-            factor[factor/factor != factor/factor] = 0
-            div[div/div != div/div] = 1
+            div[div == 0.] = 1e-6
 
-            out = self.diffuser.no_dirac[t, :] * (z - factor * out)/div + (1 - self.diffuser.no_dirac[t, :]) * z
-
-        return out#self.net(torch.cat((z, t), 1)) #+ z
+            deterministic = (self.diffuser.betas[t, :] == 0.).float()
+            out = (1-deterministic) * (z - factor * out)/div + deterministic * z
+        else:
+            for net in self.nets:
+                out = net((torch.cat((z, t_enc), 1))) + out
+        return out
 
 
     def to(self, device):

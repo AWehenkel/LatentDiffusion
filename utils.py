@@ -13,7 +13,9 @@ def add_noise(x):
     x = x / 256
     return x
 
-
+def seed_set(i):
+    np.random.seed(i)
+    
 class RandomBlur(object):
     def __init__(self, T, level_max):
         super().__init__()
@@ -21,10 +23,15 @@ class RandomBlur(object):
         self.level_max = level_max
         self.to_tensor = transforms.ToTensor()
         self.norm = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        self.seeded = False
 
     def __call__(self, x):
+
+        if not self.seeded:
+            self.seeded = True
+            self.random = np.random.RandomState()
         x0 = x
-        t = np.random.randint(0, self.T + 1)
+        t = self.random.randint(1, self.T)
         level = self.level_max / self.T * t * (t + 1)/2
         xt = x.filter(ImageFilter.GaussianBlur(level))
         level = self.level_max / self.T * t * (t - 1) / 2
@@ -36,7 +43,7 @@ class RandomBlur(object):
         return format_string
 
 
-def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
+def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True):
     if dataset == "MNIST":
         # MNIST Dataset
         train_dataset = datasets.MNIST(root='./mnist_data/', train=True, download=True, transform=transforms.Compose([
@@ -52,8 +59,10 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                       ]))
 
         # Data Loader (Input Pipeline)
-        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True, num_workers=n_workers)
-        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False, num_workers=n_workers)
+        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True,
+                                                   num_workers=n_workers, pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False,
+                                                  num_workers=n_workers, pin_memory=pin_memory)
         img_size = [1, 32, 32]
     elif dataset == "CIFAR10":
         # CIFAR10 Dataset
@@ -75,8 +84,10 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                         ]))
 
         # Data Loader (Input Pipeline)
-        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True, num_workers=n_workers)
-        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False, num_workers=n_workers)
+        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True,
+                                                   num_workers=n_workers, pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False,
+                                                  num_workers=n_workers, pin_memory=pin_memory)
         img_size = [3, 32, 32]
     elif dataset == "Heated_CIFAR10":
         # CIFAR10 Dataset
@@ -94,8 +105,10 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                         ]))
 
         # Data Loader (Input Pipeline)
-        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True, num_workers=n_workers)
-        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False, num_workers=n_workers)
+        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True,
+                                                   num_workers=n_workers, worker_init_fn=seed_set, pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False,
+                                                  num_workers=n_workers, pin_memory=pin_memory, worker_init_fn=seed_set)
         img_size = [3, 32, 32]
 
     elif dataset == "celeba":
@@ -113,7 +126,7 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                    ]))
         # Create the dataloader
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=True,
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=pin_memory,
                                                  shuffle=True, num_workers=n_workers, drop_last=True)
         dataroot = '/scratch/users/awehenkel/celeba/'
         if not torch.cuda.is_available():
@@ -129,7 +142,7 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                                  ,transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                              ]))
         # Create the dataloader
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=pin_memory,
                                                    shuffle=False, num_workers=n_workers, drop_last=True)
         img_size = [3, 64, 64]
 
@@ -145,8 +158,9 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                                  RandomBlur(T=T, level_max=level_max)
                                              ]))
         # Create the dataloader
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=True,
-                                                   shuffle=True, num_workers=n_workers, drop_last=True)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=pin_memory,
+                                                   shuffle=True, num_workers=n_workers, drop_last=True,
+                                        worker_init_fn=seed_set)
         dataroot = '/scratch/users/awehenkel/celeba/'
         if not torch.cuda.is_available():
             dataroot = '.'
@@ -158,8 +172,9 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                                 RandomBlur(T=T, level_max=level_max)
                                             ]))
         # Create the dataloader
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
-                                                  shuffle=False, num_workers=n_workers, drop_last=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=pin_memory,
+                                                  shuffle=False, num_workers=n_workers, drop_last=True,
+                                        worker_init_fn=seed_set)
 
         img_size = [3, 64, 64]
 
@@ -177,8 +192,9 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                    ]))
         # Create the dataloader
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=True,
-                                                 shuffle=True, num_workers=n_workers, drop_last=True)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=pin_memory,
+                                                 shuffle=True, num_workers=n_workers, drop_last=True,
+                                        worker_init_fn=seed_set)
         dataroot = '/scratch/users/awehenkel/celeba/'
         if not torch.cuda.is_available():
             dataroot = '.'
@@ -192,8 +208,9 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                              ]))
         # Create the dataloader
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
-                                                   shuffle=False, num_workers=n_workers, drop_last=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=pin_memory,
+                                                   shuffle=False, num_workers=n_workers, drop_last=True,
+                                        worker_init_fn=seed_set)
         img_size = [3, 256, 256]
 
     elif dataset == "Heated_celeba_HQ":
@@ -208,8 +225,9 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                                  RandomBlur(T=T, level_max=level_max)
                                              ]))
         # Create the dataloader
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=True,
-                                                   shuffle=True, num_workers=n_workers, drop_last=True)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=pin_memory,
+                                                   shuffle=True, num_workers=n_workers, drop_last=True,
+                                        worker_init_fn=seed_set)
         dataroot = '/scratch/users/awehenkel/celeba/'
         if not torch.cuda.is_available():
             dataroot = '.'
@@ -221,8 +239,9 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
                                                 RandomBlur(T=T, level_max=level_max)
                                             ]))
         # Create the dataloader
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=True,
-                                                  shuffle=False, num_workers=n_workers, drop_last=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=pin_memory,
+                                                  shuffle=False, num_workers=n_workers, drop_last=True,
+                                        worker_init_fn=seed_set)
 
         img_size = [3, 256, 256]
 
@@ -244,8 +263,8 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4):
 
 
         # Data Loader (Input Pipeline)
-        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True, drop_last=True, pin_memory=True)
-        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False, drop_last=True, pin_memory=True)
+        train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bs, shuffle=True, drop_last=True, pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=bs, shuffle=False, drop_last=True, pin_memory=pin_memory)
         img_size = [3, 32, 32]
     return train_loader, test_loader, img_size
 

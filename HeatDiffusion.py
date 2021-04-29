@@ -61,8 +61,8 @@ config_celeba_hq = {
         "beta_max": .35,
         'simplified_trans': False,
         't_emb_s': 50,
-        'T': 100,
-        'level_max': 2.5,
+        'T': 1000,
+        'level_max': .15,
         'debug': False,
         'ts_min': [60, 45, 30, 15, 0],
         'ts_max': [100, 85, 75, 55, 40],
@@ -87,9 +87,9 @@ config_cifar = {
         't_emb_s': 100,
         'level_max': .025,
         'debug': False,
-        'ts_min': [0],# 100, 150, 200],
-        'ts_max': [1000],#, 200, 250, 300],
-        'var_sizes': [40], #40, 40, 40, 40],
+        'ts_min': [0, 250, 500, 750, 1000],
+        'ts_max': [1000, 1250, 1500, 1750, 2000],
+        'var_sizes': [40, 40, 40, 40, 40],
         'decoder_type': 'Progressive2',
         'batch_size': 256
     }
@@ -143,17 +143,16 @@ if __name__ == "__main__":
         t = t[[1]].expand(bs, -1, -1, -1)
 
     def train(epoch):
-        #model.train()
         train_loss = 0
         for batch_idx, ([x0, xt, xt_1, t], _) in enumerate(train_loader):
             if debug:
-                x0 = x.to(dev).view(x.shape[0], -1)
-                t = torch.zeros(x.shape[0], 1).to(dev)
+                x0 = x.to(dev, non_blocking=True).view(x.shape[0], -1)
+                t = torch.zeros(x.shape[0], 1).to(dev, non_blocking=True)
             else:
-                x0 = x0.view(x0.shape[0], -1).to(dev)
-                xt = xt.view(x0.shape[0], -1).to(dev)
-                xt_1 = xt_1.view(x0.shape[0], -1).to(dev)
-                t = t.to(dev)
+                x0 = x0.view(x0.shape[0], -1).to(dev, non_blocking=True)
+                xt = xt.view(x0.shape[0], -1).to(dev, non_blocking=True)
+                xt_1 = xt_1.view(x0.shape[0], -1).to(dev, non_blocking=True)
+                t = t.to(dev, non_blocking=True)
 
             optimizer.zero_grad()
 
@@ -173,16 +172,15 @@ if __name__ == "__main__":
         return train_loss.item() / len(train_loader.dataset)
 
     def test(epoch):
-        #model.train(False)
         test_loss = 0
         for batch_idx, (x0, _) in enumerate(test_loader):
             if debug:
                 x0 = x.to(dev).view(x.shape[0], -1)
                 t = torch.zeros(x.shape[0], 1).to(dev).long()
             else:
-                x0 = x0.view(x0.shape[0], -1).to(dev)
+                x0 = x0.view(x0.shape[0], -1).to(dev, non_blocking=True)
                 xt = x0
-                t = torch.zeros(x0.shape[0], 1).to(dev).long() + 1
+                t = torch.zeros(x0.shape[0], 1).to(dev, non_blocking=True).long() + 1
 
             optimizer.zero_grad()
 

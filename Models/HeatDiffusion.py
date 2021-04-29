@@ -120,6 +120,7 @@ class HeatedLatentDiffusionModel(nn.Module):
         KL_pst_z_prior_z = entropy_posterior_z - (KL_prior_diffusion + KL_rev_diffusion)
 
         #print(entropy_posterior_z.mean(), KL_prior_diffusion.mean(), KL_rev_diffusion.mean())
+        #print(KL_rec_t.mean(), KL_rec_t_1.mean(), KL_pst_z_prior_z.mean())
 
         loss = (KL_rec_t + KL_rec_t_1 - KL_pst_z_prior_z).mean(0)
 

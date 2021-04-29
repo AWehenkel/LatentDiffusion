@@ -6,7 +6,7 @@ from utils import getDataLoader
 import torch.nn as nn
 import argparse
 
-wandb.init(project="vae", entity="awehenkel")
+wandb.init(project='vae', entity='awehenkel')
 
 
 def str2bool(v):
@@ -20,10 +20,10 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     config = {
         'data': 'MNIST',
-        'latent_s': 40,
+        'latent_s': [20, 20, 20, 20, 20],
         'CNN': True,
         'enc_w': 400,
         'enc_l': 1,
@@ -32,24 +32,25 @@ if __name__ == "__main__":
         'trans_w': 300,
         'trans_l': 3,
         'n_res_blocks': 1,
-        "beta_min": 0.0001,
-        "beta_max": .02,
+        "beta_min": [.0001] * 5,
+        "beta_max": [.02] * 5,
         'simplified_trans': True,
         't_emb_s': 100,
-        't_min': 0,
-        't_max': 1000,
+        't_min': [0, 250, 500, 750, 1000],
+        't_max': [1000, 1250, 1500, 1750, 2000],
         'batch_size': 100,
-        'diffusion': True
+        'diffusion': True,
+        'lr': .0005
     }
 
     parser = argparse.ArgumentParser(description='VAE running parameters')
     for k, v in config.items():
         if isinstance(v, type(True)):
-            parser.add_argument("-" + k, default=v, type=str2bool)
+            parser.add_argument('-' + k, default=v, type=str2bool)
         elif isinstance(v, type([])):
-            parser.add_argument("-" + k, default=v, nargs="+", type=type(v[0]))
+            parser.add_argument('-' + k, default=v, nargs='+', type=type(v[0]))
         else:
-            parser.add_argument("-" + k, default=v, type=type(v))
+            parser.add_argument('-' + k, default=v, type=type(v))
 
     config = parser.parse_args()
 
@@ -58,14 +59,16 @@ if __name__ == "__main__":
 
     bs = int(config['batch_size'])
 
-    train_loader, test_loader, img_size = getDataLoader(config["data"], bs)
-    config["img_size"] = img_size
+    train_loader, test_loader, img_size = getDataLoader(config['data'], bs)
+    config['img_size'] = img_size
 
     dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     model = DDPMPriorVAEModel(**config).to(dev) if config['diffusion'] else VAEModel(**config).to(dev)
 
-    optimizer = optim.Adam(model.parameters(), lr=.0005)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, threshold=0.001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08, verbose=True)
+    optimizer = optim.Adam(model.parameters(), lr=config['lr'])
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10,
+                                                           threshold=0.001, threshold_mode='rel', cooldown=0,
+                                                           min_lr=0, eps=1e-08, verbose=True)
 
     wandb.watch(model)
     def get_X_back(x0):
@@ -84,7 +87,6 @@ if __name__ == "__main__":
 
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), .25)
-
 
             train_loss += loss.item()
             optimizer.step()
@@ -110,7 +112,9 @@ if __name__ == "__main__":
         return test_loss / len(test_loader.dataset), reconstructed_test, x0[:64]
 
     for i in range(150):
+        model.train()
         train_loss = train(i)
+        model.eval()
         test_loss, x_rec, x = test(i)
         x = get_X_back(x.view(64, -1)).view(64, *img_size)
         x_rec = get_X_back(x_rec.view(64, -1)).view(64, *img_size)

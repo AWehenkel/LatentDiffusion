@@ -79,7 +79,6 @@ class DCEncoder(nn.Module):
         super(DCEncoder, self).__init__()
         image_channels = x_dim[0]
         init_channels = int(z_dim/4)
-        print(z_dim)
         kernel_size = 4
         if x_dim[1] == 32:
             self.conv = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2), act(),
