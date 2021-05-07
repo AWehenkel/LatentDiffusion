@@ -3,6 +3,53 @@ import numpy as np
 import torch
 from PIL import Image, ImageFilter
 import torch.nn as nn
+import tempfile
+import os, shutil
+from copy import deepcopy
+
+
+
+
+def copytree(src, dst, symlinks=False, ignore=None):
+    for item in os.listdir(src):
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if os.path.isdir(s):
+            shutil.copytree(s, d, symlinks, ignore)
+        else:
+            shutil.copy2(s, d)
+
+
+def make_tmp(path, dir):
+    if not os.path.exists(os.path.join('/tmp', dir)):
+        src = os.path.join(path, dir)
+        dst = os.path.join('/tmp', dir)
+        copytree(src, dst, symlinks=False, ignore=None)
+
+
+class MyCelebA(torch.utils.data.Dataset):
+    def __init__(self, root, split, pre_transform, post_transform, num_workers):
+        tmp_ds = datasets.CelebA(root, split=split, transform=pre_transform)
+        self.all_samples = []
+        self.len = 0
+        loader = torch.utils.data.DataLoader(tmp_ds, batch_size=1, num_workers=num_workers)
+        print("Loading the data in RAM...")
+        for batch_ndx, sample in enumerate(loader):
+            self.len += 1
+            n_sample = deepcopy(sample)
+            #print(n_sample)
+            #exit()
+            self.all_samples.append(n_sample)
+            if batch_ndx % 1000 == 0:
+                print(batch_ndx)
+        print("Data successfully loaded!")
+        self.transform = post_transform
+
+    def __len__(self):
+        return self.len
+
+    def __getitem__(self, item):
+        return self.transform(self.all_samples[item][0][0]), self.all_samples[item][1]
 
 def add_noise(x):
     """
@@ -112,19 +159,20 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
         img_size = [3, 32, 32]
 
     elif dataset == "celeba":
+        #make_tmp('/scratch/users/awehenkel/', 'celeba')
+        #dataroot = '/tmp/celeba/'
         dataroot = '/scratch/users/awehenkel/celeba/'
+
         if not torch.cuda.is_available():
             dataroot = '.'
         image_size = 64
-        train_dataset = datasets.CelebA(dataroot, split='train', download=False,
-                                       transform=transforms.Compose([
-                                       transforms.Resize(image_size),
-                                       transforms.CenterCrop(image_size),
-                                            transforms.ToTensor(),
-                                            add_noise,
-                                       #transforms.ToTensor(),
-                                       transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                                   ]))
+        train_dataset = MyCelebA(dataroot, split='train', num_workers=n_workers,
+                                 pre_transform=transforms.Compose([transforms.Resize(image_size),
+                                                                  transforms.CenterCrop(image_size),
+                                                                   transforms.ToTensor()]),
+                                 post_transform=transforms.Compose([add_noise,
+                                                                    transforms.Normalize((0.5, 0.5, 0.5),
+                                                                                         (0.5, 0.5, 0.5))]))
         # Create the dataloader
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=pin_memory,
                                                  shuffle=True, num_workers=n_workers, drop_last=True)
@@ -132,15 +180,12 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
         if not torch.cuda.is_available():
             dataroot = '.'
         image_size = 64
-        test_dataset = datasets.CelebA(dataroot, split='test',download=False,
-                                             transform=transforms.Compose([
-                                                 transforms.Resize(image_size),
-                                                 transforms.CenterCrop(image_size),
-                                            transforms.ToTensor(),
-                                            add_noise
-                                                 #transforms.ToTensor(),
-                                                 ,transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                                             ]))
+        test_dataset = MyCelebA(dataroot, split='test', num_workers=n_workers,
+                                 pre_transform=transforms.Compose([transforms.Resize(image_size),
+                                                                  transforms.CenterCrop(image_size),
+                                                                  transforms.ToTensor()]),
+                                 post_transform=transforms.Compose([add_noise, transforms.Normalize((0.5, 0.5, 0.5),
+                                                                                                    (0.5, 0.5, 0.5))]))
         # Create the dataloader
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=pin_memory,
                                                    shuffle=False, num_workers=n_workers, drop_last=True)
@@ -151,12 +196,13 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
         if not torch.cuda.is_available():
             dataroot = '.'
         image_size = 64
-        train_dataset = datasets.CelebA(dataroot, split='train', download=False,
-                                                transform=transforms.Compose([
+        train_dataset = MyCelebA(dataroot, split='train', num_workers=n_workers,
+                                 pre_transform=transforms.Compose([
                                                  transforms.Resize(image_size),
                                                  transforms.CenterCrop(image_size),
-                                                 RandomBlur(T=T, level_max=level_max)
-                                             ]))
+                                     transforms.ToTensor()]),
+                                 post_transform=transforms.Compose([transforms.ToPILImage(),
+                                                                    RandomBlur(T=T, level_max=level_max)]))
         # Create the dataloader
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=pin_memory,
                                                    shuffle=True, num_workers=n_workers, drop_last=True,
@@ -165,12 +211,14 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
         if not torch.cuda.is_available():
             dataroot = '.'
         image_size = 64
-        test_dataset = datasets.CelebA(dataroot, split='test', download=False,
-                                            transform=transforms.Compose([
-                                                transforms.Resize(image_size),
-                                                transforms.CenterCrop(image_size),
-                                                RandomBlur(T=T, level_max=level_max)
-                                            ]))
+        test_dataset = MyCelebA(dataroot, split='test', num_workers=n_workers,
+                                 pre_transform=transforms.Compose([
+                                                 transforms.Resize(image_size),
+                                                 transforms.CenterCrop(image_size),
+                                                                  transforms.ToTensor()
+                                             ]),
+                                 post_transform=transforms.Compose([transforms.ToPILImage(),
+                                                                    RandomBlur(T=T, level_max=level_max)]))
         # Create the dataloader
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=pin_memory,
                                                   shuffle=False, num_workers=n_workers, drop_last=True,
@@ -184,13 +232,13 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
             dataroot = '.'
         image_size = 256
         train_dataset = datasets.CelebA(dataroot, split='train', download=False,
-                                       transform=transforms.Compose([
-                                       transforms.Resize(image_size),
-                                       transforms.CenterCrop(image_size),
-                                            transforms.ToTensor(),
-                                            add_noise,
-                                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                                   ]))
+                                        transform=transforms.Compose([transforms.Resize(image_size),
+                                                                      transforms.CenterCrop(image_size),
+                                                                      transforms.ToTensor(),
+                                                                      add_noise,
+                                                                      transforms.Normalize((0.5, 0.5, 0.5),
+                                                                                                      (0.5, 0.5, 0.5))]))
+
         # Create the dataloader
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=pin_memory,
                                                  shuffle=True, num_workers=n_workers, drop_last=True,
@@ -199,14 +247,12 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
         if not torch.cuda.is_available():
             dataroot = '.'
         image_size = 256
-        test_dataset = datasets.CelebA(dataroot, split='test',download=False,
-                                             transform=transforms.Compose([
-                                                 transforms.Resize(image_size),
-                                                 transforms.CenterCrop(image_size),
-                                            transforms.ToTensor(),
-                                            add_noise,
-                                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                                             ]))
+        test_dataset = datasets.CelebA(dataroot, split='test', download=False,
+                                        transform=transforms.Compose([transforms.Resize(image_size),
+                                                                      transforms.CenterCrop(image_size),
+                                                                      transforms.ToTensor(),
+                                                                      add_noise, transforms.Normalize((0.5, 0.5, 0.5),
+                                                                                                      (0.5, 0.5, 0.5))]))
         # Create the dataloader
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=pin_memory,
                                                    shuffle=False, num_workers=n_workers, drop_last=True,
@@ -218,12 +264,10 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
         if not torch.cuda.is_available():
             dataroot = '.'
         image_size = 256
-        train_dataset = datasets.CelebA(dataroot, split='train',download=False,
-                                                transform=transforms.Compose([
-                                                 transforms.Resize(image_size),
-                                                 transforms.CenterCrop(image_size),
-                                                 RandomBlur(T=T, level_max=level_max)
-                                             ]))
+        train_dataset = datasets.CelebA(dataroot, split='train', download=False,
+                                        transform=transforms.Compose([transforms.Resize(image_size),
+                                                                      transforms.CenterCrop(image_size),
+                                                                      RandomBlur(T=T, level_max=level_max)]))
         # Create the dataloader
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs, pin_memory=pin_memory,
                                                    shuffle=True, num_workers=n_workers, drop_last=True,
@@ -233,11 +277,9 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
             dataroot = '.'
         image_size = 256
         test_dataset = datasets.CelebA(dataroot, split='test', download=False,
-                                            transform=transforms.Compose([
-                                                transforms.Resize(image_size),
-                                                transforms.CenterCrop(image_size),
-                                                RandomBlur(T=T, level_max=level_max)
-                                            ]))
+                                        transform=transforms.Compose([transforms.Resize(image_size),
+                                                                      transforms.CenterCrop(image_size),
+                                                                      RandomBlur(T=T, level_max=level_max)]))
         # Create the dataloader
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs, pin_memory=pin_memory,
                                                   shuffle=False, num_workers=n_workers, drop_last=True,

@@ -117,11 +117,18 @@ class HeatedLatentDiffusionModel(nn.Module):
         # TODO we know q(z_0|x) in closed form so we could avoid sampling and instead compute exactly p(z_T|x_0) and check KL with N(0, 1)
         KL_prior_diffusion = (-torch.log(sigma_T) + (mu_T ** 2) / 2 + .5 * sigma_T ** 2).sum(1)
 
+        #entropy_posterior_z = 0.
+        #KL_prior_diffusion = 0.
+        #KL_rev_diffusion = KL_rev_diffusion
+
+
         KL_pst_z_prior_z = entropy_posterior_z - (KL_prior_diffusion + KL_rev_diffusion)
 
         #print(entropy_posterior_z.mean(), KL_prior_diffusion.mean(), KL_rev_diffusion.mean())
         #print(KL_rec_t.mean(), KL_rec_t_1.mean(), KL_pst_z_prior_z.mean())
-
+        #KL_rec_t_1 = 0.
+        #KL_pst_z_prior_z = KL_pst_z_prior_z
+        #KL_rec_t = 0.
         loss = (KL_rec_t + KL_rec_t_1 - KL_pst_z_prior_z).mean(0)
 
         return loss
@@ -171,8 +178,8 @@ class CNNHeatedLatentDiffusion(HeatedLatentDiffusionModel):
         self.decoder = decoder_types[kwargs['decoder_type']](self.encoder.features_dim, kwargs['var_sizes'], dec_net, t_dim=self.t_emb_s,
                                           pos_enc=pos_enc, out_c=self.img_size[0], img_width=self.img_size[1])
 
-        self.diffuser = AsynchronousDiffuser(betas_min=[self.beta_min]*len(kwargs['ts_min']),
-                                             betas_max=[self.beta_max]*len(kwargs['ts_min']),
+        self.diffuser = AsynchronousDiffuser(betas_min=self.beta_min,
+                                             betas_max=self.beta_max,
                                              ts_min=kwargs['ts_min'], ts_max=kwargs['ts_max'],
                                              var_sizes=kwargs['var_sizes'])
         self.latent_transition = ImprovedTransitionNet(self.latent_s, trans_net, self.t_emb_s, self.diffuser, pos_enc=pos_enc,

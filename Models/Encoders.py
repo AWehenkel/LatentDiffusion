@@ -92,18 +92,19 @@ class DCEncoder(nn.Module):
                                       nn.Conv2d(init_channels * 4, init_channels * 8, kernel_size, padding=0, stride=2))
             # nn.MaxPool2d(2, 2))
         elif x_dim[1] == 64:
-            self.conv = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2), act(),
+            self.conv = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2),
+                                      act(),
                                       # nn.MaxPool2d(2, 2),
-                                      nn.Conv2d(init_channels, init_channels * 2, kernel_size, padding=1, stride=2),
+                                      nn.Conv2d(init_channels, init_channels * 8, kernel_size, padding=1, stride=2),
                                       act(),
-                                      nn.BatchNorm2d(init_channels * 2),
-                                      nn.Conv2d(init_channels * 2, init_channels * 4, kernel_size, padding=1, stride=2),
+                                      nn.BatchNorm2d(init_channels * 8),
+                                      nn.Conv2d(init_channels * 8, init_channels * 8, kernel_size, padding=1, stride=2),
                                       act(),
-                                      nn.BatchNorm2d(init_channels * 4),
-                                      nn.Conv2d(init_channels * 4, init_channels * 4, kernel_size, padding=0, stride=2),
+                                      nn.BatchNorm2d(init_channels * 8),
+                                      nn.Conv2d(init_channels * 8, init_channels * 8, kernel_size, padding=0, stride=2),
                                       act(),
-                                      nn.BatchNorm2d(init_channels * 4),
-                                      nn.Conv2d(init_channels * 4, init_channels * 8, kernel_size, padding=1, stride=2))
+                                      nn.BatchNorm2d(init_channels * 8),
+                                      nn.Conv2d(init_channels * 8, init_channels * 8, kernel_size, padding=1, stride=2))
         elif x_dim[1] == 256:
             self.conv = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2), act(),
                                       # nn.MaxPool2d(2, 2),

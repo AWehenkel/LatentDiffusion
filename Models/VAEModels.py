@@ -98,10 +98,13 @@ class DDPMPriorVAEModel(nn.Module):
         z0 = mu_z + torch.exp(log_sigma_z) * torch.randn(mu_z.shape, device=dev)
 
         entropy_posterior_z = log_sigma_z.sum(1) + math.log(2*(math.pi*math.e)**.5)
-
         t = torch.randint(1, self.T, (bs, 1), device=dev)
+
+        # HERE we trick to compute p(z_T|x) directly in order to take into account the known randomness of z_0
+        _, (mu_T, sigma_T) = self.diffuser.diffuse(mu_z, t * 0 + self.T, t*0)
+        sigma_T = (sigma_T ** 2 - (sigma_T ** 2 - 1) * torch.exp(2 * log_sigma_z)).sqrt()
+
         zt, _ = self.diffuser.diffuse(z0, t)
-        _, (mu_T, sigma_T) = self.diffuser.diffuse(z0, t*0+self.T)
 
         if self.T >= 1:
             mu_zt_1, sigma_zt_1 = self.diffuser.prev_mean_var(zt, z0, t)
@@ -111,7 +114,7 @@ class DDPMPriorVAEModel(nn.Module):
         else:
             KL_rev_diffusion = 0.
 
-        # TODO we know q(z_0|x) in closed form so we could avoid sampling and instead compute exactly p(z_T|x_0) and check KL with N(0, 1)
+
         KL_prior_diffusion = (-torch.log(sigma_T) + (mu_T ** 2)/2 + .5*sigma_T**2).sum(1)
 
         KL_pst_z_prior_z = entropy_posterior_z - (KL_prior_diffusion + KL_rev_diffusion)

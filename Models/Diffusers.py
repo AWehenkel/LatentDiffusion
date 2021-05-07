@@ -206,8 +206,8 @@ class AsynchronousDiffuser(nn.Module):
         t = t.view(-1)
 
         dirac_z0 = self.dirac_z0[t, :]
-        dirac_zt_1 = self.dirac_zt_1[t, :]
-        no_dirac = self.no_dirac[t, :]
+        #dirac_zt_1 = self.dirac_zt_1[t, :]
+        #no_dirac = self.no_dirac[t, :]
 
         sqrt_alphas_cumprod = self.sqrt_alphas_cumprod[t.view(-1), :] / self.sqrt_alphas_cumprod[t0.view(-1), :]
         sqrt_alphas_cumprod_prev = self.sqrt_alphas_cumprod[t.view(-1)-1, :] / self.sqrt_alphas_cumprod[t0.view(-1), :]
@@ -218,12 +218,17 @@ class AsynchronousDiffuser(nn.Module):
         posterior_mean_coef1 = betas * sqrt_alphas_cumprod_prev/(sqrt_one_minus_alphas_cumprod)**2
         posterior_mean_coef2 = sqrt_one_minus_alphas_cumprod_prev**2 * alphas.sqrt()/(sqrt_one_minus_alphas_cumprod)**2
 
-        mu_cond = posterior_mean_coef1 * z_0 + posterior_mean_coef2 * z_t
-        mu_cond[mu_cond / mu_cond != mu_cond / mu_cond] = 0.
+        posterior_mean_coef1[dirac_z0 == 1.] = 1.
+        posterior_mean_coef2[dirac_z0 == 1.] = 0.
 
-        mu_cond = z_t * dirac_zt_1 + dirac_z0 * z_0 + no_dirac * mu_cond
+        t = t.view(-1)
 
+        mu_cond = self.posterior_mean_coef1[t, :] * z_0 + self.posterior_mean_coef2[t, :] * z_t
+        #mu_cond[mu_cond / mu_cond != mu_cond / mu_cond] = 0.
+
+        #mu_cond = z_t * dirac_zt_1 + dirac_z0 * z_0 + no_dirac * mu_cond
         sigma = sqrt_one_minus_alphas_cumprod_prev**2/sqrt_one_minus_alphas_cumprod**2 * betas
+        # TODO define a value for sigma when it is a dirac
         return mu_cond, sigma
 
     def past_sample(self, mu_z_pred, t_1, temperature=1.):

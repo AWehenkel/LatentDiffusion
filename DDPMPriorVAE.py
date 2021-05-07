@@ -5,6 +5,7 @@ import wandb
 from utils import getDataLoader
 import torch.nn as nn
 import argparse
+import os
 
 wandb.init(project='vae', entity='awehenkel')
 
@@ -23,7 +24,7 @@ def str2bool(v):
 if __name__ == '__main__':
     config = {
         'data': 'MNIST',
-        'latent_s': [20, 20, 20, 20, 20],
+        'latent_s': [200],
         'CNN': True,
         'enc_w': 400,
         'enc_l': 1,
@@ -32,15 +33,16 @@ if __name__ == '__main__':
         'trans_w': 300,
         'trans_l': 3,
         'n_res_blocks': 1,
-        "beta_min": [.0001] * 5,
-        "beta_max": [.02] * 5,
+        "beta_min": [.0001],
+        "beta_max": [.02],
         'simplified_trans': True,
         't_emb_s': 100,
-        't_min': [0, 250, 500, 750, 1000],
-        't_max': [1000, 1250, 1500, 1750, 2000],
+        't_min': [0],
+        't_max': [1000],
         'batch_size': 100,
         'diffusion': True,
-        'lr': .0005
+        'lr': .0005,
+        'nb_epoch': 250
     }
 
     parser = argparse.ArgumentParser(description='VAE running parameters')
@@ -58,6 +60,7 @@ if __name__ == '__main__':
     config = wandb.config
 
     bs = int(config['batch_size'])
+    nb_epoch = int(config['nb_epoch'])
 
     train_loader, test_loader, img_size = getDataLoader(config['data'], bs)
     config['img_size'] = img_size
@@ -111,7 +114,10 @@ if __name__ == '__main__':
         reconstructed_test = model(x0[:64])
         return test_loss / len(test_loader.dataset), reconstructed_test, x0[:64]
 
-    for i in range(150):
+
+    best_test_loss = float("inf")
+
+    for i in range(nb_epoch):
         model.train()
         train_loss = train(i)
         model.eval()
@@ -126,3 +132,9 @@ if __name__ == '__main__':
                    "Reconstructed": [wandb.Image(x_rec)],
                    "Data": [wandb.Image(x)],
                    "epoch": i})
+        torch.save(model.state_dict(), os.path.join(wandb.run.dir, "last_model.h5"))
+        torch.save(optimizer.state_dict(), os.path.join(wandb.run.dir, "last_optimizer.h5"))
+        if test_loss < best_test_loss:
+            torch.save(model.state_dict(), os.path.join(wandb.run.dir, "best_model.h5"))
+            torch.save(optimizer.state_dict(), os.path.join(wandb.run.dir, "best_optimizer.h5"))
+            best_test_loss = test_loss
