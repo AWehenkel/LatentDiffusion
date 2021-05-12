@@ -149,22 +149,22 @@ class DCDecoder(nn.Module):
             self.main = nn.Sequential(
                 # input is Z, going into a convolution
                 nn.ConvTranspose2d(nz, ngf * 32, 4, 1, 0, bias=False),
-                nn.BatchNorm2d(ngf * 32),
+                #nn.BatchNorm2d(ngf * 32),
                 act(),
                 nn.ConvTranspose2d(ngf * 32, ngf * 16, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf * 16),
+                #nn.BatchNorm2d(ngf * 16),
                 act(),
                 # state size. (ngf*8) x 4 x 4
                 nn.ConvTranspose2d(ngf * 16, ngf * 8, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf * 8),
+                #nn.BatchNorm2d(ngf * 8),
                 act(),
                 # state size. (ngf*4) x 8 x 8
                 nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf * 4),
+                #nn.BatchNorm2d(ngf * 4),
                 act(),
                 # state size. (ngf*2) x 16 x 16
                 nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
-                nn.BatchNorm2d(ngf*2),
+                #nn.BatchNorm2d(ngf*2),
                 act(),
                 # state size. (ngf) x 32 x 32
                 nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
@@ -432,4 +432,91 @@ class ProgressiveDecoder2(nn.Module):
 
         out = self.conv(out)
 
+        return out
+
+
+
+
+class TwoStagesDCDecoder(nn.Module):
+    def __init__(self, act=nn.SELU, out_c=1, img_width=32):
+        super(TwoStagesDCDecoder, self).__init__()
+        # Number of channels in the training images. For color images this is 3
+        nc = out_c
+        nz = 24
+
+        # Size of feature maps in generator
+        ngf = 64
+
+        if img_width == 32:
+            self.t_conv1 = nn.Sequential(
+                # input is Z, going into a convolution
+                nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
+                act(),
+                # state size. (ngf*8) x 4 x 4
+                nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
+                act(),
+                # state size. (ngf*4) x 8 x 8
+                nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False))
+            self.t_conv2 = nn.Sequential(
+                act(),
+                # state size. (ngf*2) x 16 x 16
+                nn.ConvTranspose2d(ngf * 2 + 3, nc, 4, 2, 1, bias=False),
+                nn.Tanh()
+                # state size. (ngf) x 32 x 32
+            )
+        elif img_width == 64:
+            self.t_conv1 = nn.Sequential(
+                # input is Z, going into a convolution
+                nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=True),
+                act(),
+                # state size. (ngf*8) x 4 x 4
+                nn.ConvTranspose2d(ngf * 8, ngf * 8, 4, 2, 1, bias=True),
+                act(),
+                # state size. (ngf*4) x 8 x 8
+                nn.ConvTranspose2d(ngf * 8, ngf * 8, 4, 2, 1, bias=True)
+                )
+            self.t_conv2 = nn.Sequential(
+                act(),
+                # state size. (ngf*2) x 16 x 16
+                nn.ConvTranspose2d(ngf * 8 + 24, 4 * ngf, 4, 2, 1, bias=True),
+                act(),
+                # state size. (ngf) x 32 x 32
+                nn.ConvTranspose2d(4 * ngf, nc, 4, 2, 1, bias=True),
+                nn.Tanh()
+                # state size. (nc) x 64 x 64
+            )
+
+        elif img_width == 256:
+            self.t_conv1 = nn.Sequential(
+                # input is Z, going into a convolution
+                nn.ConvTranspose2d(nz, ngf * 32, 4, 1, 0, bias=False),
+                #nn.BatchNorm2d(ngf * 32),
+                act(),
+                nn.ConvTranspose2d(ngf * 32, ngf * 16, 4, 2, 1, bias=False),
+                #nn.BatchNorm2d(ngf * 16),
+                act(),
+                # state size. (ngf*8) x 4 x 4
+                nn.ConvTranspose2d(ngf * 16, ngf * 8, 4, 2, 1, bias=False),
+                #nn.BatchNorm2d(ngf * 8),
+                act(),
+                # state size. (ngf*4) x 8 x 8
+                nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False))
+            self.t_conv2 = nn.Sequential(
+                #nn.BatchNorm2d(ngf * 4),
+                act(),
+                # state size. (ngf*2) x 16 x 16
+                nn.ConvTranspose2d(ngf * 4 + 24, ngf * 2, 4, 2, 1, bias=False),
+                #nn.BatchNorm2d(ngf*2),
+                act(),
+                # state size. (ngf) x 32 x 32
+                nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
+                act(),
+                # state size. (nc) x 64 x 64
+                nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
+                nn.Tanh()
+            )
+
+    def forward(self, z1, z2, t=None):
+        h1 = self.t_conv1(z2)
+        out = self.t_conv2(torch.cat((h1, z1), 1))
         return out

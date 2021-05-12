@@ -394,6 +394,102 @@ class ImprovedTransitionNet(nn.Module):
         return z_t
 
 
+# Only ok for 16*16 images
+class UNetTransitionNet(nn.Module):
+    def __init__(self, z_dim, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=False, device='cpu'):
+        super(UNetTransitionNet, self).__init__()
+        if z_dim[1] == z_dim[2] == 16:
+            init_channels = z_dim[0]
+            kernel_size = 4
+            self.act = act()
+            self.conv1 = nn.Conv2d(init_channels, init_channels * 4, kernel_size, padding=1, stride=2)
+            self.conv2 = nn.Conv2d(init_channels * 4, init_channels * 8, kernel_size, padding=1, stride=2)
+            self.conv3 = nn.Conv2d(init_channels * 8, init_channels * 8, kernel_size, padding=0, stride=2)
+
+            self.t_conv1 = nn.ConvTranspose2d(init_channels * 8 + 24, init_channels * 4, 4, 1, 0, bias=False)
+            self.t_conv2 = nn.ConvTranspose2d(init_channels * 8 + init_channels * 4, init_channels*4, 4, 2, 1, bias=False)
+            self.t_conv3 = nn.ConvTranspose2d(init_channels * 8, init_channels * 2, 4, 2, 1, bias=False)
+
+            self.conv4 = nn.Conv2d(init_channels*2, init_channels, 1, padding=0, stride=1)
+
+            self.conv1_attention = nn.Sequential(nn.Linear(t_dim, init_channels * 4), nn.Sigmoid())
+            self.conv2_attention = nn.Sequential(nn.Linear(t_dim, init_channels * 8), nn.Sigmoid())
+            self.t_conv1_attention = nn.Sequential(nn.Linear(t_dim, init_channels * 4), nn.Sigmoid())
+            self.t_conv2_attention = nn.Sequential(nn.Linear(t_dim, init_channels * 4), nn.Sigmoid())
+            self.t_conv3_attention = nn.Sequential(nn.Linear(t_dim, init_channels * 2), nn.Sigmoid())
+        else:
+            raise Exception
+
+        self.diffuser = diffuser
+        self.z_dim = z_dim
+        self.device = device
+        self.pos_enc = pos_enc
+        self.simplified_trans = simplified_trans
+
+    def _forward(self, z, t, cond):
+        t = self.pos_enc(t) if self.pos_enc is not None else t
+
+        h1 = self.conv1(z)
+        h1_timed = self.conv1_attention(t).unsqueeze(2).unsqueeze(3) * h1
+        h2 = self.conv2(self.act(h1))
+        h2_timed = self.conv2_attention(t).unsqueeze(2).unsqueeze(3) * h2
+        h3 = self.conv3(self.act(h2))
+        h3 = self.t_conv1_attention(t).unsqueeze(2).unsqueeze(3) * self.act(self.t_conv1(torch.cat((cond, h3), 1)))
+
+        h4 = self.t_conv2_attention(t).unsqueeze(2).unsqueeze(3) * self.act(self.t_conv2(torch.cat((h3, h2_timed), 1)))
+
+        h5 = self.t_conv3_attention(t).unsqueeze(2).unsqueeze(3) * self.act(self.t_conv3(torch.cat((h4, h1_timed), 1)))
+
+        out = self.conv4(h5)
+
+        return out
+
+    def forward(self, z, t, cond):
+        dims = z.shape
+        b_size = dims[0]
+        out = self._forward(z, t, cond)
+        t = t.view(-1)
+
+        if self.simplified_trans:
+
+            denom = (1 - self.diffuser.alphas_cumprod[t, :]).sqrt()
+            denom[denom == 0.] = 1e-6
+            factor = self.diffuser.betas[t, :]/denom
+            div = self.diffuser.alphas[t, :].sqrt()
+            div[div == 0.] = 1e-6
+
+            deterministic = (self.diffuser.betas[t, :] == 0.).float()
+            out = (1-deterministic) * (z.view(b_size, -1) - factor * out.view(b_size, -1))/div + deterministic * z.view(b_size, -1)
+            out = out.view(*dims)
+
+        return out
+
+    def to(self, device):
+        super().to(device)
+        self.device = device
+        return self
+
+    def sample(self, cond, nb_samples, t0=0, temperature=1.):
+        if self.diffuser is None:
+            raise NotImplementedError
+
+        zT = torch.randn(nb_samples, self.z_dim).to(self.device) * temperature
+        dims = zT.shape
+        b_size = dims[0]
+        T = self.diffuser.T
+        z_t = zT
+        for t in range(T, t0-1, -1):
+            t_t = torch.ones(nb_samples, 1).to(self.device).long() * t
+
+            mu_z_pred = self.forward(z_t.view(*dims), t_t, cond).view(b_size, -1)
+
+            z_t = self.diffuser.past_sample(mu_z_pred, t_t, temperature)
+
+        return z_t.view(*dims)
+
+
+
+
 
 '''
 class NFTransitionNet(nn.Module):

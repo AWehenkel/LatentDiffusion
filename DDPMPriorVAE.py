@@ -1,6 +1,6 @@
 import torch
 import torch.optim as optim
-from Models import VAEModel, DDPMPriorVAEModel
+from Models import VAEModel, DDPMPriorVAEModel, NFPriorVAEModel, TwoStagesDDPMPriorVAEModel
 import wandb
 from utils import getDataLoader
 import torch.nn as nn
@@ -19,6 +19,10 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+model_dict = {"DDPM": DDPMPriorVAEModel, "Classical": VAEModel, "NF": NFPriorVAEModel,
+              "TwoStages": TwoStagesDDPMPriorVAEModel}
 
 
 if __name__ == '__main__':
@@ -40,9 +44,13 @@ if __name__ == '__main__':
         't_min': [0],
         't_max': [1000],
         'batch_size': 100,
-        'diffusion': True,
         'lr': .0005,
-        'nb_epoch': 250
+        'nb_epoch': 250,
+        'model': 'DDPM',
+        'cond_w': 300,
+        'cond_l': 4,
+        'n_nf_steps': 3,
+        'n_workers': 4
     }
 
     parser = argparse.ArgumentParser(description='VAE running parameters')
@@ -62,11 +70,11 @@ if __name__ == '__main__':
     bs = int(config['batch_size'])
     nb_epoch = int(config['nb_epoch'])
 
-    train_loader, test_loader, img_size = getDataLoader(config['data'], bs)
+    train_loader, test_loader, img_size = getDataLoader(config['data'], bs, n_workers=config['n_workers'])
     config['img_size'] = img_size
 
     dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    model = DDPMPriorVAEModel(**config).to(dev) if config['diffusion'] else VAEModel(**config).to(dev)
+    model = model_dict[config["model"]](**config).to(dev)
 
     optimizer = optim.Adam(model.parameters(), lr=config['lr'])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10,
