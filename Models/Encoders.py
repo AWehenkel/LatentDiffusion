@@ -142,30 +142,50 @@ class TwoStagesDCEncoder(nn.Module):
         image_channels = x_dim[0]
         init_channels = 3 * 2
         kernel_size = 4
+
         # TODO: Do we need pooling at some point here?
         if x_dim[1] == 32:
-            self.conv1 = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2),
-                                       act())
-            self.conv2 = nn.Sequential(nn.Conv2d(init_channels, init_channels * 2, kernel_size, padding=1, stride=2),
+            self.conv1 = nn.Sequential(nn.Conv2d(image_channels, init_channels*4, 1, padding=0, stride=1),
+                                       act(),
+                                       nn.BatchNorm2d(init_channels * 4),
+                                       nn.Conv2d(init_channels*4, init_channels*4, 3, padding=1, stride=1),
+                                       act(),
+                                       nn.BatchNorm2d(init_channels * 4),
+                                       nn.Conv2d(init_channels*4, init_channels * 4, kernel_size, padding=1, stride=2),
+                                       act(),
+                                       nn.BatchNorm2d(init_channels * 4),
+                                       nn.Conv2d(init_channels*4, init_channels * 2, 1, padding=0, stride=1),
+                                       #act()
+                                       )
+            self.conv2 = nn.Sequential(nn.Conv2d(init_channels * 2, init_channels * 8, kernel_size, padding=1, stride=2),
                                       act(),
-                nn.BatchNorm2d(init_channels * 2),
-                                      nn.Conv2d(init_channels * 2, init_channels * 4, kernel_size, padding=1, stride=2),
+                                       nn.BatchNorm2d(init_channels * 8),
+                #nn.BatchNorm2d(init_channels * 2),
+                                      nn.Conv2d(init_channels * 8, init_channels * 16, kernel_size, padding=1, stride=2),
                                       act(),
-                                      nn.BatchNorm2d(init_channels * 4),
-                                      nn.Conv2d(init_channels * 4, init_channels * 8, kernel_size, padding=0, stride=2))
+                                       nn.BatchNorm2d(init_channels * 16),
+                                      #nn.BatchNorm2d(init_channels * 4),
+                                      nn.Conv2d(init_channels * 16, init_channels * 16 * 2, kernel_size, padding=0, stride=2))
+
+
+            self.h1_dim = self.conv1(torch.randn(1, 3, 32, 32)).shape[1:]
+            self.h2_dim = self.conv2(self.conv1(torch.randn(1, 3, 32, 32))).shape[1:]
+
         elif x_dim[1] == 64:
             self.conv1 = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2),
                                       act(),
-                                      nn.Conv2d(init_channels, init_channels * 8, kernel_size, padding=1, stride=2),
-                                      act())
-            self.conv2 = nn.Sequential(nn.BatchNorm2d(init_channels * 8),
-                                      nn.Conv2d(init_channels * 8, init_channels * 8, kernel_size, padding=1, stride=2),
+                                      nn.Conv2d(init_channels, init_channels * 4, kernel_size, padding=1, stride=2))
+            self.conv2 = nn.Sequential(nn.BatchNorm2d(init_channels * 4),
+                                      nn.Conv2d(init_channels * 4, init_channels * 8, kernel_size, padding=1, stride=2),
                                       act(),
                                        nn.BatchNorm2d(init_channels * 8),
                                       nn.Conv2d(init_channels * 8, init_channels * 8, kernel_size, padding=0, stride=2),
                                       act(),
                                       nn.BatchNorm2d(init_channels * 8),
                                       nn.Conv2d(init_channels * 8, init_channels * 8, kernel_size, padding=1, stride=2))
+            self.h1_dim = self.conv1(torch.randn(1, 3, 64, 64)).shape[1:]
+            self.h2_dim = self.conv2(self.conv1(torch.randn(1, 3, 64, 64))).shape[1:]
+
         elif x_dim[1] == 256:
             self.conv1 = nn.Sequential(nn.Conv2d(image_channels, init_channels, kernel_size, padding=1, stride=2), act(),
                                       nn.BatchNorm2d(init_channels),
@@ -175,10 +195,9 @@ class TwoStagesDCEncoder(nn.Module):
                                       nn.Conv2d(init_channels * 2, init_channels * 4, kernel_size, padding=1, stride=2),
                                       act(),
                                       nn.BatchNorm2d(init_channels * 4),
-                                      nn.Conv2d(init_channels * 4, init_channels * 8, kernel_size, padding=1, stride=2),
-                                      act())
-            self.conv2 = nn.Sequential(nn.BatchNorm2d(init_channels * 8),
-                                      nn.Conv2d(init_channels * 8, init_channels * 16, kernel_size, padding=1, stride=2),
+                                      nn.Conv2d(init_channels * 4, init_channels * 4, kernel_size, padding=1, stride=2))
+            self.conv2 = nn.Sequential(nn.BatchNorm2d(init_channels * 4),
+                                      nn.Conv2d(init_channels * 4, init_channels * 16, kernel_size, padding=1, stride=2),
                                       act(),
                                       nn.BatchNorm2d(init_channels * 16),
                                       nn.Conv2d(init_channels * 16, init_channels * 8, kernel_size, padding=1, stride=2),
@@ -186,11 +205,11 @@ class TwoStagesDCEncoder(nn.Module):
                                       nn.BatchNorm2d(init_channels * 8),
                                       nn.Conv2d(init_channels * 8, init_channels * 8, kernel_size, padding=0, stride=2))
 
-        self.h1_dim = self.conv1(torch.randn(1, 3, 32, 32)).shape[1:]
-        self.h2_dim = self.conv2(self.conv1(torch.randn(1, 3, 32, 32))).shape[1:]
+            self.h1_dim = self.conv1(torch.randn(1, 3, 256, 256)).shape[1:]
+            self.h2_dim = self.conv2(self.conv1(torch.randn(1, 3, 256, 256))).shape[1:]
+
 
     def forward(self, x, t=None):
-        h1 = self.conv1(x)
-        h2 = self.conv2(h1)
+        h2 = self.conv1(x)
+        h1 = self.conv2(h2)
         return h1, h2
-

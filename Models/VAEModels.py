@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from Models import TemporalDecoder, TemporalEncoder, DCDecoder, DCEncoder, AsynchronousDiffuser, ImprovedTransitionNet, \
     SimpleImageDecoder, SimpleImageEncoder, PositionalEncoder, StupidPositionalEncoder, TwoStagesDCDecoder, \
-    TwoStagesDCEncoder, UNetTransitionNet
+    TwoStagesDCEncoder, UNetTransitionNet, DDPMUNetTransitionNet
 import math
 import NF
 
@@ -52,7 +52,7 @@ class VAEModel(nn.Module):
         return self
 
     def sample(self, nb_samples=1):
-        z = torch.randn(64, self.latent_s).to(self.device)
+        z = torch.randn(nb_samples, self.latent_s).to(self.device)
         x = self.dec(z).view(nb_samples, -1)
 
         return x
@@ -91,6 +91,8 @@ class DDPMPriorVAEModel(nn.Module):
                                                        pos_enc=pos_enc,
                                                        simplified_trans=kwargs['simplified_trans'])
         self.T = self.diffuser.T
+        self.exact_ddpm_loss = kwargs['exact_ddpm_loss']
+        self.KL_prior_diffusion = kwargs['KL_prior_diffusion']
 
 
     def loss(self, x0):
@@ -112,13 +114,17 @@ class DDPMPriorVAEModel(nn.Module):
         if self.T >= 1:
             mu_zt_1, sigma_zt_1 = self.diffuser.prev_mean_var(zt, z0, t)
             zt_1_rec = self.trans_net(zt, t - 1)
-
-            KL_rev_diffusion = (((mu_zt_1 - zt_1_rec) ** 2)).sum(1)
+            if self.exact_ddpm_loss:
+                KL_rev_diffusion = self.T*(((mu_zt_1 - zt_1_rec) ** 2)/(2*sigma_zt_1**2)).sum(1)
+            else:
+                KL_rev_diffusion = self.T*(((mu_zt_1 - zt_1_rec) ** 2)).sum(1)
         else:
             KL_rev_diffusion = 0.
 
-
-        KL_prior_diffusion = (-torch.log(sigma_T) + (mu_T ** 2)/2 + .5*sigma_T**2).sum(1)
+        if self.KL_prior_diffusion:
+            KL_prior_diffusion = (-torch.log(sigma_T) + (mu_T ** 2)/2 + .5*sigma_T**2).sum(1)
+        else:
+            KL_prior_diffusion = 0.
 
         KL_pst_z_prior_z = entropy_posterior_z - (KL_prior_diffusion + KL_rev_diffusion)
 
@@ -236,27 +242,52 @@ class TwoStagesDDPMPriorVAEModel(nn.Module):
         else:
             pos_enc = StupidPositionalEncoder(self.T_MAX)
 
-        self.enc = TwoStagesDCEncoder(self.img_size)
-        self.dec = TwoStagesDCDecoder(out_c=self.img_size[0], img_width=self.img_size[1])
+        z_2_dim = [4, 16, 16] if self.img_size[1] == 32 else [24, 16, 16]
 
-        z_1_dim = [3, 16, 16] if self.img_size[1] == 32 else [24, 16, 16]
-        self.z_1_dim = z_1_dim
+        self.enc = TwoStagesDCEncoder(self.img_size)
+        self.dec = TwoStagesDCDecoder(out_c=self.img_size[0], img_width=self.img_size[1], z_2_dim=z_2_dim)
+
+        self.z1_dim = 16*6
+        self.z_2_dim = z_2_dim
 
         self.diffuser_1 = AsynchronousDiffuser(betas_min=kwargs['beta_min'], betas_max=kwargs['beta_max'],
                                              ts_min=kwargs['t_min'], ts_max=kwargs['t_max'],
-                                               var_sizes=[z_1_dim[0]*z_1_dim[1]*z_1_dim[2]])
+                                               var_sizes=[self.z1_dim])
 
         self.diffuser_2 = AsynchronousDiffuser(betas_min=kwargs['beta_min'], betas_max=kwargs['beta_max'],
                                                ts_min=kwargs['t_min'], ts_max=kwargs['t_max'],
-                                               var_sizes=[24*1*1])
+                                               var_sizes=[z_2_dim[0]*z_2_dim[1]*z_2_dim[2]])
 
         trans_net = [[kwargs['trans_w']] * kwargs['trans_l']] * kwargs['n_res_blocks']
-        self.trans_net_2 = ImprovedTransitionNet(24, trans_net, self.t_emb_s, self.diffuser_2, pos_enc=pos_enc,
+        self.trans_net_1 = ImprovedTransitionNet(self.z1_dim, trans_net, self.t_emb_s, self.diffuser_1, pos_enc=pos_enc,
                                                  simplified_trans=kwargs['simplified_trans'])
 
-        self.trans_net_1 = UNetTransitionNet(z_dim=z_1_dim, t_dim=self.t_emb_s, diffuser=self.diffuser_1,
-                                             pos_enc=pos_enc, simplified_trans=kwargs['simplified_trans'])
+        if True:
+            self.trans_net_2 = UNetTransitionNet(z_dim=z_2_dim, t_dim=self.t_emb_s, diffuser=self.diffuser_2,
+                                                 cond_in=self.z1_dim,
+                                                 pos_enc=pos_enc, simplified_trans=kwargs['simplified_trans'])
+        else:
+            self.trans_net_2 = DDPMUNetTransitionNet(z_dim=z_2_dim, diffuser=self.diffuser_2,
+                                                     simplified_trans=kwargs['simplified_trans'])
         self.T = max(kwargs['t_max'])
+
+        nz = self.z1_dim
+        ngf = 64
+        act = nn.SELU
+        self.t_conv1 = nn.Sequential(
+            # input is Z, going into a convolution
+            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=True),
+            #nn.BatchNorm2d(ngf * 8),
+            act(),
+            # state size. (ngf*8) x 4 x 4
+            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=True),
+            #nn.BatchNorm2d(ngf * 4),
+            act(),
+            # state size. (ngf*4) x 8 x 8
+            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=True))
+
+        self.conv1 = nn.Sequential(nn.Conv2d(ngf * 2 + 12, 16, 3, 1, 1), #nn.BatchNorm2d(16), act(),
+                                   nn.Conv2d(16, z_2_dim[0] * 2, 3, 1, 1))
 
 
     def loss(self, x0):
@@ -264,13 +295,14 @@ class TwoStagesDDPMPriorVAEModel(nn.Module):
         dev = x0.device
         # Encoding
         h1, h2 = self.enc(x0.view(-1, *self.img_size))
-        print(h1.shape, h2.shape)
-        mu_z_1, log_sigma_z_1 = torch.split(h1, self.z_1_dim[0], 1)
-        mu_z_2, log_sigma_z_2 = torch.split(h2, 24, 1)
-        z1_shape, z2_shape = mu_z_1.shape, mu_z_2.shape
-
+        mu_z_1, log_sigma_z_1 = torch.split(h1, self.z1_dim, 1)
         z0_1 = mu_z_1 + torch.exp(log_sigma_z_1) * torch.randn(mu_z_1.shape, device=dev)
+
+        #print(h2.shape, self.t_conv1(z0_1).shape, self.conv1(torch.cat((self.t_conv1(z0_1), h2), 1)).shape)
+        mu_z_2, log_sigma_z_2 = torch.split(self.conv1(torch.cat((self.t_conv1(z0_1), h2), 1)), self.z_2_dim[0], 1)
         z0_2 = mu_z_2 + torch.exp(log_sigma_z_2) * torch.randn(mu_z_2.shape, device=dev)
+
+        z1_shape, z2_shape = mu_z_1.shape, mu_z_2.shape
 
         entropy_posterior_z = log_sigma_z_1.view(bs, -1).sum(1) + log_sigma_z_2.view(bs, -1).sum(1) + math.log(2*(math.pi*math.e)**.5)
         t = torch.randint(1, self.T, (bs, 1), device=dev)
@@ -285,17 +317,14 @@ class TwoStagesDDPMPriorVAEModel(nn.Module):
         zt_2, _ = self.diffuser_2.diffuse(z0_2.view(bs, -1), t)
 
         if self.T >= 1:
-            print(zt_1.shape, z0_1.shape)
             mu_zt_1_1, sigma_zt_1_1 = self.diffuser_1.prev_mean_var(zt_1, z0_1.view(bs, -1), t)
             mu_zt_1_2, sigma_zt_1_2 = self.diffuser_2.prev_mean_var(zt_2, z0_2.view(bs, -1), t)
-            print(zt_1.view(*z1_shape).shape, zt_2.view(bs, 24, 1, 1).shape)
-            zt_1_rec = self.trans_net_1(zt_1.view(*z1_shape), t - 1, zt_2.view(bs, 24, 1, 1)).view(bs, -1)
-            zt_2_rec = self.trans_net_2(zt_2, t - 1)
+            zt_2_rec = self.trans_net_2(zt_2.view(*z2_shape), t - 1, z0_1.view(bs, self.z1_dim, 1, 1)).view(bs, -1)
+            zt_1_rec = self.trans_net_1(zt_1, t - 1)
 
             KL_rev_diffusion = (((mu_zt_1_1 - zt_1_rec) ** 2)).sum(1) + (((mu_zt_1_2 - zt_2_rec) ** 2)).sum(1)
         else:
             KL_rev_diffusion = 0.
-
 
         KL_prior_diffusion = (-torch.log(sigma_T_1) + (mu_T_1 ** 2)/2 + .5*sigma_T_1**2).sum(1) + \
                              (-torch.log(sigma_T_2) + (mu_T_2 ** 2) / 2 + .5 * sigma_T_2 ** 2).sum(1)
@@ -312,21 +341,25 @@ class TwoStagesDDPMPriorVAEModel(nn.Module):
 
     def forward(self, x0):
         h1, h2 = self.enc(x0.view(-1, *self.img_size))
-        mu_z_1, log_sigma_z_1 = torch.split(h1, 24, 1)
-        mu_z_2, log_sigma_z_2 = torch.split(h2, 24, 1)
-        z0_1 = mu_z_1 + torch.exp(log_sigma_z_1) * torch.randn(mu_z_1.shape, device=self.dev)
-        z0_2 = mu_z_2 + torch.exp(log_sigma_z_2) * torch.randn(mu_z_2.shape, device=self.dev)
-        mu_x_pred = self.dec(z0_1, z0_2)
+        mu_z_1, log_sigma_z_1 = torch.split(h1, self.z1_dim, 1)
+        z0_1 = mu_z_1 + torch.exp(log_sigma_z_1) * torch.randn(mu_z_1.shape, device=self.device)
+
+        mu_z_2, log_sigma_z_2 = torch.split(self.conv1(torch.cat((self.t_conv1(z0_1), h2), 1)), self.z_2_dim[0], 1)
+        z0_2 = mu_z_2 + torch.exp(log_sigma_z_2) * torch.randn(mu_z_2.shape, device=self.device)
+
+        mu_x_pred = self.dec(z0_1, 0 * z0_2)
         return mu_x_pred
 
     def to(self, device):
         super().to(device)
+        self.trans_net_2.to(device)
+        self.trans_net_1.to(device)
         self.device = device
         return self
 
     def sample(self, nb_samples=1):
-        z0_2 = self.trans_net_2.sample(nb_samples)
-        z0_1 = self.trans_net_1.sample(z0_2.view(nb_samples, 24, 1, 1), nb_samples)
+        z0_1 = self.trans_net_1.sample(nb_samples).view(nb_samples, self.z1_dim, 1, 1)
+        z0_2 = 0 * self.trans_net_2.sample(z0_1, nb_samples)
 
         mu_x_pred = self.dec(z0_1, z0_2).view(nb_samples, -1)
 

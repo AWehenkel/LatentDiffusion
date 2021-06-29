@@ -310,23 +310,27 @@ class ProgressiveDecoder2(nn.Module):
             self.weight_z2 = nn.Sequential(nn.Linear(t_dim, ngf * 2), nn.Sigmoid())
             self.weight_z3 = nn.Sequential(nn.Linear(t_dim, ngf), nn.Sigmoid())
             self.t_conv1 = nn.Sequential(nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
-                                         #nn.BatchNorm2d(ngf * 8),
+                                         nn.BatchNorm2d(ngf * 8),
                                          act(), # state size. (ngf*8) x 4 x 4
                                          nn.Conv2d(ngf * 8, ngf * 4, 1),
+                                         nn.BatchNorm2d(ngf * 4),
                                          act(),
                                          nn.ConvTranspose2d(ngf * 4, ngf * 4, 4, 2, 1, bias=False),
+                                         nn.BatchNorm2d(ngf * 4),
                                         act())
 
             self.t_conv2 = nn.Sequential(#nn.BatchNorm2d(ngf * 4),
                                         nn.Conv2d(ngf * 4, ngf * 2, 1),
+                nn.BatchNorm2d(ngf * 2),
                                         act(),
-                                         nn.ConvTranspose2d(ngf * 2, ngf * 2, 4, 2, 1, bias=False)
+                                         nn.ConvTranspose2d(ngf * 2, ngf * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf * 2)
             )
 
             self.t_conv3 = nn.Sequential(#nn.BatchNorm2d(ngf * 2),
                                          act(),
                                          nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
-                                         #nn.BatchNorm2d(ngf),
+                                         nn.BatchNorm2d(ngf),
                                          act(),
                                          )
 
@@ -438,11 +442,11 @@ class ProgressiveDecoder2(nn.Module):
 
 
 class TwoStagesDCDecoder(nn.Module):
-    def __init__(self, act=nn.SELU, out_c=1, img_width=32):
+    def __init__(self, act=nn.SELU, out_c=1, img_width=32, z_2_dim=[4, 16, 16]):
         super(TwoStagesDCDecoder, self).__init__()
         # Number of channels in the training images. For color images this is 3
         nc = out_c
-        nz = 24
+        nz = 6*16
 
         # Size of feature maps in generator
         ngf = 64
@@ -451,16 +455,27 @@ class TwoStagesDCDecoder(nn.Module):
             self.t_conv1 = nn.Sequential(
                 # input is Z, going into a convolution
                 nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
+                #nn.BatchNorm2d(ngf * 8),
                 act(),
                 # state size. (ngf*8) x 4 x 4
                 nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
+                #nn.BatchNorm2d(ngf * 4),
                 act(),
                 # state size. (ngf*4) x 8 x 8
-                nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False))
+                nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
+                #nn.BatchNorm2d(ngf * 2)
+            )
             self.t_conv2 = nn.Sequential(
                 act(),
                 # state size. (ngf*2) x 16 x 16
-                nn.ConvTranspose2d(ngf * 2 + 3, nc, 4, 2, 1, bias=False),
+                nn.ConvTranspose2d(ngf * 2 + z_2_dim[0], ngf * 4, 4, 2, 1, bias=True),
+                #nn.BatchNorm2d(ngf * 4),
+                act(),
+                nn.Conv2d(ngf * 4, ngf * 2, 3, 1, 1, bias=True),
+                #nn.BatchNorm2d(ngf * 2),
+
+                act(),
+                nn.Conv2d(ngf * 2, nc, 1, 1, 0, bias=True),
                 nn.Tanh()
                 # state size. (ngf) x 32 x 32
             )
@@ -517,6 +532,6 @@ class TwoStagesDCDecoder(nn.Module):
             )
 
     def forward(self, z1, z2, t=None):
-        h1 = self.t_conv1(z2)
-        out = self.t_conv2(torch.cat((h1, z1), 1))
+        h1 = self.t_conv1(z1)
+        out = self.t_conv2(torch.cat((h1, z2), 1))
         return out

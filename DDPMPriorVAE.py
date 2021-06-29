@@ -7,6 +7,9 @@ import torch.nn as nn
 import argparse
 import os
 
+os.environ['WANDB_SILENT'] = 'false'
+
+
 wandb.init(project='vae', entity='awehenkel')
 
 
@@ -50,7 +53,9 @@ if __name__ == '__main__':
         'cond_w': 300,
         'cond_l': 4,
         'n_nf_steps': 3,
-        'n_workers': 4
+        'n_workers': 4,
+        'exact_ddpm_loss': False,
+        'KL_prior_diffusion': True
     }
 
     parser = argparse.ArgumentParser(description='VAE running parameters')
@@ -78,7 +83,7 @@ if __name__ == '__main__':
 
     optimizer = optim.Adam(model.parameters(), lr=config['lr'])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10,
-                                                           threshold=0.001, threshold_mode='rel', cooldown=0,
+                                                           threshold=0.1, threshold_mode='rel', cooldown=0,
                                                            min_lr=0, eps=1e-08, verbose=True)
 
     wandb.watch(model)
@@ -129,19 +134,20 @@ if __name__ == '__main__':
         model.train()
         train_loss = train(i)
         model.eval()
-        test_loss, x_rec, x = test(i)
-        x = get_X_back(x.view(64, -1)).view(64, *img_size)
-        x_rec = get_X_back(x_rec.view(64, -1)).view(64, *img_size)
-        samples = get_X_back(model.sample(64)).view(64, *img_size)
-        print('====> Epoch: {} - Average Train loss: {:.4f} - Average Test Loss: {:.4f}'.format(i, train_loss, test_loss))
-        wandb.log({"Train Loss": train_loss,
-                   "Test Loss": test_loss,
-                   "Samples": [wandb.Image(samples)],
-                   "Reconstructed": [wandb.Image(x_rec)],
-                   "Data": [wandb.Image(x)],
-                   "epoch": i})
-        torch.save(model.state_dict(), os.path.join(wandb.run.dir, "last_model.h5"))
-        torch.save(optimizer.state_dict(), os.path.join(wandb.run.dir, "last_optimizer.h5"))
+        with torch.no_grad():
+            test_loss, x_rec, x = test(i)
+            x = get_X_back(x.view(64, -1)).view(64, *img_size)
+            x_rec = get_X_back(x_rec.view(64, -1)).view(64, *img_size)
+            samples = get_X_back(model.sample(64)).view(64, *img_size)
+            print('====> Epoch: {} - Average Train loss: {:.4f} - Average Test Loss: {:.4f}'.format(i, train_loss, test_loss))
+            wandb.log({"Train Loss": train_loss,
+                       "Test Loss": test_loss,
+                       "Samples": [wandb.Image(samples)],
+                       "Reconstructed": [wandb.Image(x_rec)],
+                       "Data": [wandb.Image(x)],
+                       "epoch": i})
+            torch.save(model.state_dict(), os.path.join(wandb.run.dir, "last_model.h5"))
+            torch.save(optimizer.state_dict(), os.path.join(wandb.run.dir, "last_optimizer.h5"))
         if test_loss < best_test_loss:
             torch.save(model.state_dict(), os.path.join(wandb.run.dir, "best_model.h5"))
             torch.save(optimizer.state_dict(), os.path.join(wandb.run.dir, "best_optimizer.h5"))

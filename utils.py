@@ -93,11 +93,11 @@ class RandomBlur(object):
 def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True):
     if dataset == "MNIST":
         # MNIST Dataset
-        train_dataset = datasets.MNIST(root='./mnist_data/', train=True, download=True, transform=transforms.Compose([
+        train_dataset = datasets.MNIST(root='./mnist_data/', train=True, download=False, transform=transforms.Compose([
                                           transforms.Resize((32, 32)), transforms.ToTensor(),
                                             add_noise,
                                           transforms.Normalize((0.5), (0.5))]))
-        test_dataset = datasets.MNIST(root='./mnist_data/', train=False, download=True,
+        test_dataset = datasets.MNIST(root='./mnist_data/', train=False, download=False,
                                       transform=transforms.Compose([
                                           transforms.Resize((32, 32)),
                                           transforms.ToTensor(),
@@ -113,7 +113,7 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
         img_size = [1, 32, 32]
     elif dataset == "CIFAR10":
         # CIFAR10 Dataset
-        train_dataset = datasets.CIFAR10(root='./cifar10_data/', train=True, download=True,
+        train_dataset = datasets.CIFAR10(root='./cifar10_data/', train=True, download=False,
                                          transform=transforms.Compose([
                                              transforms.Resize(32),
                                              transforms.RandomHorizontalFlip(),
@@ -121,7 +121,7 @@ def getDataLoader(dataset, bs, T=100, level_max=5., n_workers=4, pin_memory=True
                                             add_noise,
                                             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                          ]))
-        test_dataset = datasets.CIFAR10(root='./cifar10_data/', train=False, download=True,
+        test_dataset = datasets.CIFAR10(root='./cifar10_data/', train=False, download=False,
                                         transform=transforms.Compose([
                                             transforms.Resize(32),
                                             transforms.RandomHorizontalFlip(),

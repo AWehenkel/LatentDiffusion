@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 #from NFmodels import AutoregressiveConditioner, AffineNormalizer, buildFCNormalizingFlow
-
+from .script_util import create_model
 
 # This code shamely steals lines from Improved Denoising Diffusion Probabilistic Models
 
@@ -396,7 +396,8 @@ class ImprovedTransitionNet(nn.Module):
 
 # Only ok for 16*16 images
 class UNetTransitionNet(nn.Module):
-    def __init__(self, z_dim, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=False, device='cpu'):
+    def __init__(self, z_dim, t_dim=1, diffuser=None, pos_enc=None, act=nn.SELU, simplified_trans=False, device='cpu',
+                 cond_in=24):
         super(UNetTransitionNet, self).__init__()
         if z_dim[1] == z_dim[2] == 16:
             init_channels = z_dim[0]
@@ -406,11 +407,12 @@ class UNetTransitionNet(nn.Module):
             self.conv2 = nn.Conv2d(init_channels * 4, init_channels * 8, kernel_size, padding=1, stride=2)
             self.conv3 = nn.Conv2d(init_channels * 8, init_channels * 8, kernel_size, padding=0, stride=2)
 
-            self.t_conv1 = nn.ConvTranspose2d(init_channels * 8 + 24, init_channels * 4, 4, 1, 0, bias=False)
+            self.t_conv1 = nn.ConvTranspose2d(init_channels * 8 + cond_in, init_channels * 4, 4, 1, 0, bias=False)
             self.t_conv2 = nn.ConvTranspose2d(init_channels * 8 + init_channels * 4, init_channels*4, 4, 2, 1, bias=False)
             self.t_conv3 = nn.ConvTranspose2d(init_channels * 8, init_channels * 2, 4, 2, 1, bias=False)
 
-            self.conv4 = nn.Conv2d(init_channels*2, init_channels, 1, padding=0, stride=1)
+            self.conv4 = nn.Conv2d(init_channels * 2, init_channels * 4, 3, padding=1, stride=1)
+            self.conv5 = nn.Conv2d(init_channels * 4, init_channels * 1, 3, padding=1, stride=1)
 
             self.conv1_attention = nn.Sequential(nn.Linear(t_dim, init_channels * 4), nn.Sigmoid())
             self.conv2_attention = nn.Sequential(nn.Linear(t_dim, init_channels * 8), nn.Sigmoid())
@@ -422,6 +424,7 @@ class UNetTransitionNet(nn.Module):
 
         self.diffuser = diffuser
         self.z_dim = z_dim
+        self.z_dim_tot = z_dim[0] * z_dim[1] * z_dim[2]
         self.device = device
         self.pos_enc = pos_enc
         self.simplified_trans = simplified_trans
@@ -440,7 +443,7 @@ class UNetTransitionNet(nn.Module):
 
         h5 = self.t_conv3_attention(t).unsqueeze(2).unsqueeze(3) * self.act(self.t_conv3(torch.cat((h4, h1_timed), 1)))
 
-        out = self.conv4(h5)
+        out = self.conv5(self.act(self.conv4(h5)))
 
         return out
 
@@ -473,19 +476,74 @@ class UNetTransitionNet(nn.Module):
         if self.diffuser is None:
             raise NotImplementedError
 
-        zT = torch.randn(nb_samples, self.z_dim).to(self.device) * temperature
-        dims = zT.shape
-        b_size = dims[0]
+        zT = torch.randn(nb_samples, self.z_dim_tot).to(self.device) * temperature
         T = self.diffuser.T
         z_t = zT
         for t in range(T, t0-1, -1):
             t_t = torch.ones(nb_samples, 1).to(self.device).long() * t
 
-            mu_z_pred = self.forward(z_t.view(*dims), t_t, cond).view(b_size, -1)
+            mu_z_pred = self.forward(z_t.view(nb_samples, *self.z_dim), t_t, cond).view(nb_samples, -1)
 
             z_t = self.diffuser.past_sample(mu_z_pred, t_t, temperature)
 
-        return z_t.view(*dims)
+        return z_t.view(nb_samples, *self.z_dim)
+
+
+class DDPMUNetTransitionNet(nn.Module):
+    def __init__(self, z_dim, diffuser=None, simplified_trans=False, device='cpu'):
+        super(DDPMUNetTransitionNet, self).__init__()
+        self.net = create_model(64, 128, 2, False, False, False, '16, 8', 4, -1, True, 0., False, 24,
+                                in_channels=z_dim[0], out_channels=z_dim[0])
+        self.diffuser = diffuser
+        self.z_dim = z_dim
+        self.z_dim_tot = z_dim[0] * z_dim[1] * z_dim[2]
+        self.device = device
+        self.simplified_trans = simplified_trans
+
+    def _forward(self, z, t, cond):
+        out = self.net(z, t.view(-1), cond=cond.squeeze(2).squeeze(2))
+        return out
+
+    def forward(self, z, t, cond):
+        dims = z.shape
+        b_size = dims[0]
+        out = self._forward(z, t, cond)
+        t = t.view(-1)
+
+        if self.simplified_trans:
+
+            denom = (1 - self.diffuser.alphas_cumprod[t, :]).sqrt()
+            denom[denom == 0.] = 1e-6
+            factor = self.diffuser.betas[t, :]/denom
+            div = self.diffuser.alphas[t, :].sqrt()
+            div[div == 0.] = 1e-6
+
+            deterministic = (self.diffuser.betas[t, :] == 0.).float()
+            out = (1-deterministic) * (z.view(b_size, -1) - factor * out.view(b_size, -1))/div + deterministic * z.view(b_size, -1)
+            out = out.view(*dims)
+
+        return out
+
+    def to(self, device):
+        super().to(device)
+        self.device = device
+        return self
+
+    def sample(self, cond, nb_samples, t0=0, temperature=1.):
+        if self.diffuser is None:
+            raise NotImplementedError
+
+        zT = torch.randn(nb_samples, self.z_dim_tot).to(self.device) * temperature
+        T = self.diffuser.T
+        z_t = zT
+        for t in range(T, t0-1, -1):
+            t_t = torch.ones(nb_samples, 1).to(self.device).long() * t
+
+            mu_z_pred = self.forward(z_t.view(nb_samples, *self.z_dim), t_t, cond).view(nb_samples, -1)
+
+            z_t = self.diffuser.past_sample(mu_z_pred, t_t, temperature)
+
+        return z_t.view(nb_samples, *self.z_dim)
 
 
 
